@@ -1,0 +1,5 @@
+{
+  "CLOUD_ASR_ENABLED": true,
+  "CLOUD_ASR_PROXY_URL": "wss://asr.example.com/v1/asr/tencent/realtime",
+  "CLOUD_ASR_PROXY_TOKEN": "replace_with_a_revocable_proxy_token"
+}
