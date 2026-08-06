@@ -1,10 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
 
 import '../core/timeline_clock.dart';
+import '../core/widgets/permission_explanation_sheet.dart';
 import '../data/app_repository.dart';
 import '../models/entities.dart';
 import '../services/ai_processing_service.dart';
@@ -12,10 +14,10 @@ import '../services/background_recording_service.dart';
 import '../services/gallery_photo_picker.dart';
 import '../services/media_storage.dart';
 import '../widgets/photo_source_sheet.dart';
+import '../widgets/recording_quick_actions.dart';
 import '../widgets/text_input_dialog.dart';
 import '../widgets/timeline_event_tile.dart';
 import 'camera_capture_screen.dart';
-import 'review_screen.dart';
 
 class LiveRecordScreen extends StatefulWidget {
   const LiveRecordScreen({
@@ -26,6 +28,7 @@ class LiveRecordScreen extends StatefulWidget {
     required this.aiService,
     required this.autoStart,
     this.galleryPicker,
+    this.resumeOffsetMs,
     super.key,
   });
   final Session session;
@@ -35,6 +38,7 @@ class LiveRecordScreen extends StatefulWidget {
   final AiProcessingService aiService;
   final bool autoStart;
   final GalleryPhotoPicker? galleryPicker;
+  final int? resumeOffsetMs;
 
   @override
   State<LiveRecordScreen> createState() => _LiveRecordScreenState();
@@ -137,9 +141,10 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
       await _clock.pause();
       _session = _session.copyWith(status: SessionStatus.paused);
       await widget.repository.updateSession(_session);
+      // The foreground task writes the interruption into its durable manifest;
+      // syncing it here avoids creating a duplicate event in SQLite.
       await widget.recording.syncManifest(_session.id);
       _events = await widget.repository.listTimelineEvents(_session.id);
-      _transcripts = await widget.repository.listTranscripts(_session.id);
       _transcripts = await widget.repository.listTranscripts(_session.id);
       if (mounted) {
         setState(() {});
@@ -166,18 +171,30 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
         _currentChapter = chapters.last.title ?? '章节${chapters.length}';
       }
       if (widget.autoStart) {
+        final requestNotifications = await _prepareRecordingPermissions();
         _session = _session.copyWith(
           status: SessionStatus.recording,
           recordingStartedAt: DateTime.now(),
         );
         await widget.repository.updateSession(_session);
-        await widget.recording.start(_session);
-        await _clock.start();
-        await _addEvent(
-          TimelineEventType.chapter,
-          title: '章节1',
-          offsetOverride: 0,
+        await widget.recording.start(
+          _session,
+          requestNotifications: requestNotifications,
         );
+        await _clock.start(initialOffsetMs: widget.resumeOffsetMs ?? 0);
+        if (widget.resumeOffsetMs == null) {
+          await _addEvent(
+            TimelineEventType.chapter,
+            title: '章节1',
+            offsetOverride: 0,
+          );
+        } else {
+          await _addEvent(
+            TimelineEventType.interruption,
+            title: '已从异常保存点继续录音',
+            offsetOverride: widget.resumeOffsetMs,
+          );
+        }
       } else {
         await widget.recording.syncManifest(_session.id);
         final existingOffset = await widget.recording.activeOffsetMs();
@@ -203,6 +220,38 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
     }
   }
 
+  Future<bool> _prepareRecordingPermissions() async {
+    var microphone = await Permission.microphone.status;
+    if (!mounted) throw const RecordingException('页面已关闭，未开始录音。');
+    if (!microphone.isGranted) {
+      final proceed = await PermissionExplanationSheet.show(
+        context,
+        icon: Icons.mic_none_rounded,
+        title: '允许使用麦克风',
+        message: '麦克风用于持续录制这条本地讲记，并为实时字幕提供音频。原始录音不会被自动上传。',
+        actionLabel: '继续授权',
+      );
+      if (!proceed) throw const RecordingException('未获得麦克风权限，录音尚未开始。');
+      microphone = await Permission.microphone.request();
+    }
+    if (!microphone.isGranted) {
+      throw const RecordingException('麦克风权限未开启。请在系统设置中允许后重新开始。');
+    }
+
+    if (await Permission.notification.isDenied && mounted) {
+      final proceed = await PermissionExplanationSheet.show(
+        context,
+        icon: Icons.notifications_active_outlined,
+        title: '显示录音通知',
+        message: '持久通知用于明确提示后台录音状态，并让你从锁屏或其他应用快速返回。拒绝不会删除任何数据。',
+        actionLabel: '允许通知',
+      );
+      if (!proceed) return false;
+      return (await Permission.notification.request()).isGranted;
+    }
+    return true;
+  }
+
   Future<void> _refreshOffset() async {
     final value = await _clock.offsetMs();
     if (mounted) setState(() => _offsetMs = value);
@@ -214,7 +263,9 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
     String? note,
     String? photoPath,
     String? thumbnailPath,
+    String? photoSource,
     int? offsetOverride,
+    DateTime? deviceTime,
   }) async {
     final event = TimelineEvent(
       id: _uuid.v4(),
@@ -225,10 +276,31 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
       note: note,
       photoPath: photoPath,
       thumbnailPath: thumbnailPath,
-      createdAt: DateTime.now(),
+      photoSource: photoSource,
+      // createdAt is the device wall-clock timestamp; offsetMs remains the
+      // monotonic, pause-aware playback position.
+      createdAt: deviceTime ?? DateTime.now(),
     );
     await widget.repository.insertTimelineEvent(event);
     if (mounted) {
+      if (type != TimelineEventType.chapter || offsetOverride != 0) {
+        HapticFeedback.selectionClick();
+        final label = type == TimelineEventType.highlight
+            ? '已标记重点'
+            : type == TimelineEventType.question
+            ? '已记录疑问'
+            : type == TimelineEventType.text
+            ? '已保存备注'
+            : type == TimelineEventType.chapter
+            ? '已开始新章节'
+            : '照片已加入时间轴';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$label · ${formatDuration(event.offsetMs)}'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
       setState(
         () =>
             _events = [..._events, event]
@@ -254,12 +326,24 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
   }
 
   Future<void> _takePhoto() async {
-    final permission = await Permission.camera.request();
+    var permission = await Permission.camera.status;
+    if (!mounted) return;
+    if (!permission.isGranted) {
+      final proceed = await PermissionExplanationSheet.show(
+        context,
+        icon: Icons.camera_alt_outlined,
+        title: '允许使用相机',
+        message: '相机只用于把现场照片保存到这条本地记录；拍摄期间录音会继续。',
+        actionLabel: '继续授权',
+      );
+      if (!proceed) return;
+      permission = await Permission.camera.request();
+    }
     if (!permission.isGranted) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('需要相机权限才能拍照')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('相机权限未开启；录音仍在继续。可在系统设置中允许后重试。')),
+        );
       }
       return;
     }
@@ -274,6 +358,8 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
       await _persistPhoto(
         sourcePath: result.temporaryPath,
         offsetMs: result.offsetMs,
+        source: 'camera',
+        deviceTime: result.capturedAt,
       );
     } catch (error) {
       _showPhotoError('照片保存失败', error);
@@ -282,14 +368,21 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
 
   Future<void> _importGalleryPhoto() async {
     final offsetMs = await _clock.offsetMs();
+    final startedAt = DateTime.now();
     try {
       await widget.storage.writePendingGalleryImport(
         sessionId: _session.id,
         offsetMs: offsetMs,
+        deviceTime: startedAt,
       );
       final sourcePath = await _galleryPicker.pickImage();
       if (sourcePath == null) return;
-      await _persistPhoto(sourcePath: sourcePath, offsetMs: offsetMs);
+      await _persistPhoto(
+        sourcePath: sourcePath,
+        offsetMs: await _clock.offsetMs(),
+        source: 'gallery',
+        deviceTime: DateTime.now(),
+      );
     } catch (error) {
       _showPhotoError('相册导入失败', error);
     } finally {
@@ -302,11 +395,15 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
       final pendingOffset = await widget.storage.readPendingGalleryImportOffset(
         _session.id,
       );
+      final pendingDeviceTime = await widget.storage
+          .readPendingGalleryImportDeviceTime(_session.id);
       final paths = await _galleryPicker.retrieveLostImages();
       if (paths.isEmpty) return;
       await _persistPhoto(
         sourcePath: paths.first,
         offsetMs: pendingOffset ?? await _clock.offsetMs(),
+        source: 'gallery',
+        deviceTime: pendingDeviceTime ?? DateTime.now(),
       );
       if (mounted) {
         ScaffoldMessenger.of(
@@ -323,6 +420,8 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
   Future<void> _persistPhoto({
     required String sourcePath,
     required int offsetMs,
+    required String source,
+    required DateTime deviceTime,
   }) async {
     final stored = await widget.storage.storePhoto(
       sessionId: _session.id,
@@ -337,7 +436,9 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
       note: note,
       photoPath: stored.path,
       thumbnailPath: stored.thumbnailPath,
+      photoSource: source,
       offsetOverride: offsetMs,
+      deviceTime: deviceTime,
     );
     if (mounted) setState(() => _photoCount++);
   }
@@ -382,15 +483,34 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
     if (mounted) setState(() => _currentChapter = title);
   }
 
+  Future<void> _addTextNote() async {
+    final text = await _optionalTextDialog(title: '添加备注', hint: '记录此刻的想法或讲解线索');
+    if (text == null || text.trim().isEmpty) return;
+    await _addEvent(TimelineEventType.text, title: '备注', note: text.trim());
+  }
+
   Future<void> _togglePause() async {
     if (_paused) {
+      final deviceTime = DateTime.now();
       widget.recording.resume();
       await _clock.resume();
       _session = _session.copyWith(status: SessionStatus.recording);
+      await _addEvent(
+        TimelineEventType.interruption,
+        title: '继续录音',
+        deviceTime: deviceTime,
+      );
     } else {
+      final deviceTime = DateTime.now();
       widget.recording.pause();
-      await _clock.pause();
+      final offset = await _clock.pause();
       _session = _session.copyWith(status: SessionStatus.paused);
+      await _addEvent(
+        TimelineEventType.interruption,
+        title: '暂停录音',
+        offsetOverride: offset,
+        deviceTime: deviceTime,
+      );
     }
     await widget.repository.updateSession(_session);
     if (mounted) setState(() {});
@@ -416,27 +536,57 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
     );
     if (confirmed != true) return;
     setState(() => _busy = true);
-    final offset = await _clock.pause();
-    await widget.recording.stop();
-    await widget.recording.syncManifest(_session.id);
-    final segments = await widget.repository.listAudioSegments(_session.id);
-    final mediaDuration = segments.fold(
-      0,
-      (sum, segment) => sum + segment.durationMs,
-    );
-    _session = _session.copyWith(
-      status: SessionStatus.completed,
-      durationMs: mediaDuration > 0 ? mediaDuration : offset,
-    );
-    await widget.repository.updateSession(_session);
-    if (!mounted) return;
-    await Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => ReviewScreen(
-          session: _session,
-          repository: widget.repository,
-          storage: widget.storage,
-          aiService: widget.aiService,
+    try {
+      final offset = await _clock.pause();
+      await widget.recording.stop();
+      await widget.recording.syncManifest(_session.id);
+      final segments = await widget.repository.listAudioSegments(_session.id);
+      final mediaDuration = segments.fold(
+        0,
+        (sum, segment) => sum + segment.durationMs,
+      );
+      _session = _session.copyWith(
+        status: SessionStatus.completed,
+        durationMs: mediaDuration > 0 ? mediaDuration : offset,
+      );
+      await widget.repository.updateSession(_session);
+      if (!mounted) return;
+      Navigator.of(context).pop(_session);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('结束保存未完全完成：$error。已落盘的音频和节点不会被删除，请稍后重试。'),
+          duration: const Duration(seconds: 8),
+        ),
+      );
+    }
+  }
+
+  void _showEventDetails(TimelineEvent event) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                event.title ?? event.type.label,
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+              Text('${formatDuration(event.offsetMs)} · 录音仍在继续'),
+              if (event.note?.isNotEmpty == true) ...[
+                const SizedBox(height: 12),
+                Text(event.note!),
+              ],
+            ],
+          ),
         ),
       ),
     );
@@ -464,11 +614,30 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
       );
     }
     return PopScope(
-      canPop: false,
+      canPop: true,
       child: Scaffold(
         appBar: AppBar(
           title: Text(_session.title),
           automaticallyImplyLeading: false,
+          leading: IconButton(
+            onPressed: () => Navigator.of(context).pop(),
+            icon: const Icon(Icons.keyboard_arrow_down_rounded),
+            tooltip: '最小化，继续录音',
+          ),
+          actions: [
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: Center(
+                child: Text(
+                  _paused ? '已暂停' : '录音中',
+                  style: TextStyle(
+                    color: _paused ? Colors.orange : Colors.red,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
         body: _busy
             ? const Center(child: CircularProgressIndicator())
@@ -479,8 +648,9 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                       child: Card(
                         color: _paused
-                            ? Colors.orange.shade100
-                            : Colors.red.shade100,
+                            ? Theme.of(context).colorScheme.tertiaryContainer
+                            : Theme.of(context).colorScheme.errorContainer
+                                  .withValues(alpha: 0.55),
                         child: Padding(
                           padding: const EdgeInsets.all(16),
                           child: Row(
@@ -530,6 +700,7 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
                         ),
                       ),
                     ),
+                    RecordingWaveform(active: !_paused, phase: _offsetMs),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: _LiveTranscriptCard(
@@ -548,42 +719,14 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
                     const SizedBox(height: 10),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: GridView.count(
-                        crossAxisCount: 2,
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        mainAxisSpacing: 10,
-                        crossAxisSpacing: 10,
-                        childAspectRatio: 2.05,
-                        children: [
-                          _ActionButton(
-                            icon: Icons.add_photo_alternate_outlined,
-                            label: '照片',
-                            onPressed: _choosePhotoSource,
-                            primary: true,
-                          ),
-                          _ActionButton(
-                            icon: Icons.star,
-                            label: '重点',
-                            onPressed: () => _addEvent(
-                              TimelineEventType.highlight,
-                              title: '重点',
-                            ),
-                          ),
-                          _ActionButton(
-                            icon: Icons.help_outline,
-                            label: '没听懂',
-                            onPressed: () => _addEvent(
-                              TimelineEventType.question,
-                              title: '没听懂',
-                            ),
-                          ),
-                          _ActionButton(
-                            icon: Icons.bookmark_add_outlined,
-                            label: '新章节',
-                            onPressed: _newChapter,
-                          ),
-                        ],
+                      child: RecordingQuickActions(
+                        onPhoto: _choosePhotoSource,
+                        onHighlight: () =>
+                            _addEvent(TimelineEventType.highlight, title: '重点'),
+                        onQuestion: () =>
+                            _addEvent(TimelineEventType.question, title: '没听懂'),
+                        onChapter: _newChapter,
+                        onNote: _addTextNote,
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -614,7 +757,7 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
                       child: Align(
                         alignment: Alignment.centerLeft,
                         child: Text(
-                          '最近添加',
+                          '最近事件',
                           style: TextStyle(fontWeight: FontWeight.bold),
                         ),
                       ),
@@ -629,7 +772,9 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
                                   const SizedBox(height: 8),
                               itemBuilder: (_, index) => TimelineEventTile(
                                 event: _events.reversed.elementAt(index),
-                                onTap: () {},
+                                onTap: () => _showEventDetails(
+                                  _events.reversed.elementAt(index),
+                                ),
                               ),
                             ),
                     ),
@@ -639,6 +784,43 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
       ),
     );
   }
+}
+
+class RecordingWaveform extends StatelessWidget {
+  const RecordingWaveform({
+    required this.active,
+    required this.phase,
+    super.key,
+  });
+  final bool active;
+  final int phase;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: active ? '录音正在进行' : '录音已暂停',
+    child: SizedBox(
+      height: 34,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: List.generate(29, (index) {
+          final seed = ((index * 13 + phase ~/ 160) % 17).abs();
+          final height = active ? 7.0 + seed * 1.25 : 5.0;
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 240),
+            width: 3,
+            height: height,
+            margin: const EdgeInsets.symmetric(horizontal: 2),
+            decoration: BoxDecoration(
+              color: active
+                  ? Theme.of(context).colorScheme.error.withValues(alpha: 0.75)
+                  : Theme.of(context).colorScheme.outlineVariant,
+              borderRadius: BorderRadius.circular(99),
+            ),
+          );
+        }),
+      ),
+    ),
+  );
 }
 
 class _LiveTranscriptCard extends StatelessWidget {
@@ -723,36 +905,5 @@ class _LiveTranscriptCard extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-class _ActionButton extends StatelessWidget {
-  const _ActionButton({
-    required this.icon,
-    required this.label,
-    required this.onPressed,
-    this.primary = false,
-  });
-  final IconData icon;
-  final String label;
-  final VoidCallback onPressed;
-  final bool primary;
-
-  @override
-  Widget build(BuildContext context) {
-    final child = Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Icon(icon, size: 28),
-        const SizedBox(width: 10),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
-        ),
-      ],
-    );
-    return primary
-        ? FilledButton(onPressed: onPressed, child: child)
-        : FilledButton.tonal(onPressed: onPressed, child: child);
   }
 }

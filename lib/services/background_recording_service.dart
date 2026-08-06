@@ -84,8 +84,11 @@ class BackgroundRecordingService {
     }
   }
 
-  Future<void> start(Session session) async {
-    await requestNotificationPermission();
+  Future<void> start(
+    Session session, {
+    bool requestNotifications = true,
+  }) async {
+    if (requestNotifications) await requestNotificationPermission();
     final recorder = AudioRecorder();
     final permitted = await recorder.hasPermission();
     await recorder.dispose();
@@ -402,11 +405,43 @@ class RecordingTaskHandler extends TaskHandler {
       throw StateError('缺少录音服务配置');
     }
     await Directory(p.join(_sessionDir, 'audio')).create(recursive: true);
+    await _restoreExistingManifest();
     _stateSubscription = _recorder.onStateChanged().listen(_onRecorderState);
     await _loadCloudConfiguration();
     await _initializeRecognizer();
     await _startSegment();
     if (_cloudEnabled) unawaited(_connectCloud());
+  }
+
+  Future<void> _restoreExistingManifest() async {
+    final manifest = File(p.join(_sessionDir, 'recording_manifest.json'));
+    if (!await manifest.exists()) return;
+    try {
+      final data =
+          jsonDecode(await manifest.readAsString()) as Map<String, dynamic>;
+      final segments = (data['segments'] as List<dynamic>? ?? const [])
+          .cast<Map<String, dynamic>>();
+      for (final segment in segments) {
+        _segments.add(Map<String, Object?>.from(segment));
+      }
+      for (final event in (data['events'] as List<dynamic>? ?? const [])) {
+        _events.add(Map<String, Object?>.from(event as Map));
+      }
+      for (final transcript
+          in (data['transcripts'] as List<dynamic>? ?? const [])) {
+        _transcripts.add(Map<String, Object?>.from(transcript as Map));
+      }
+      final durationMs = segments.fold<int>(
+        0,
+        (sum, segment) => sum + ((segment['durationMs'] as num?)?.round() ?? 0),
+      );
+      _timelineSamples = durationMs * asrSampleRate ~/ 1000;
+      _sequence = segments.length;
+      _transcriptSequence = _transcripts.length;
+      _utteranceStartMs = durationMs;
+    } catch (_) {
+      // A malformed manifest must not prevent a new recoverable segment.
+    }
   }
 
   Future<void> _loadCloudConfiguration() async {
@@ -754,6 +789,7 @@ class RecordingTaskHandler extends TaskHandler {
     FlutterForegroundTask.sendDataToMain({
       'type': 'interruption',
       'offsetMs': _timelineMs,
+      'createdAt': DateTime.now().millisecondsSinceEpoch,
     });
   }
 
@@ -839,6 +875,7 @@ class RecordingTaskHandler extends TaskHandler {
       FlutterForegroundTask.sendDataToMain({
         'type': 'interruption',
         'offsetMs': _timelineMs,
+        'createdAt': DateTime.now().millisecondsSinceEpoch,
       });
     }
   }

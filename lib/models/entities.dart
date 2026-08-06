@@ -1,17 +1,21 @@
-enum SceneType { classroom, lecture, fieldVisit, custom }
+enum SceneType { classroom, lecture, fieldVisit, meeting, interview, custom }
 
 extension SceneTypeLabel on SceneType {
   String get label => switch (this) {
-    SceneType.classroom => '课堂学习',
-    SceneType.lecture => '专题讲座',
+    SceneType.classroom => '课堂',
+    SceneType.lecture => '讲座',
     SceneType.fieldVisit => '实地参观',
-    SceneType.custom => '自定义',
+    SceneType.meeting => '会议',
+    SceneType.interview => '访谈',
+    SceneType.custom => '其他',
   };
 
   String get defaultTitlePrefix => switch (this) {
     SceneType.classroom => '课堂',
     SceneType.lecture => '讲座',
     SceneType.fieldVisit => '参观',
+    SceneType.meeting => '会议',
+    SceneType.interview => '访谈',
     SceneType.custom => '记录',
   };
 }
@@ -52,6 +56,11 @@ class Session {
     this.location,
     this.speaker,
     this.note,
+    this.activityName,
+    this.tags = const [],
+    this.exportedAt,
+    this.exportPath,
+    this.exportSizeBytes,
     this.recordingStartedAt,
   });
 
@@ -61,6 +70,11 @@ class Session {
   final String? location;
   final String? speaker;
   final String? note;
+  final String? activityName;
+  final List<String> tags;
+  final DateTime? exportedAt;
+  final String? exportPath;
+  final int? exportSizeBytes;
   final DateTime createdAt;
   final DateTime? recordingStartedAt;
   final int durationMs;
@@ -73,6 +87,11 @@ class Session {
     String? location,
     String? speaker,
     String? note,
+    String? activityName,
+    List<String>? tags,
+    DateTime? exportedAt,
+    String? exportPath,
+    int? exportSizeBytes,
     DateTime? recordingStartedAt,
     int? durationMs,
     SessionStatus? status,
@@ -84,6 +103,11 @@ class Session {
     location: location ?? this.location,
     speaker: speaker ?? this.speaker,
     note: note ?? this.note,
+    activityName: activityName ?? this.activityName,
+    tags: tags ?? this.tags,
+    exportedAt: exportedAt ?? this.exportedAt,
+    exportPath: exportPath ?? this.exportPath,
+    exportSizeBytes: exportSizeBytes ?? this.exportSizeBytes,
     createdAt: createdAt,
     recordingStartedAt: recordingStartedAt ?? this.recordingStartedAt,
     durationMs: durationMs ?? this.durationMs,
@@ -98,6 +122,11 @@ class Session {
     'location': location,
     'speaker': speaker,
     'note': note,
+    'activity_name': activityName,
+    'tags': tags.join(','),
+    'exported_at': exportedAt?.millisecondsSinceEpoch,
+    'export_path': exportPath,
+    'export_size_bytes': exportSizeBytes,
     'created_at': createdAt.millisecondsSinceEpoch,
     'recording_started_at': recordingStartedAt?.millisecondsSinceEpoch,
     'duration_ms': durationMs,
@@ -112,6 +141,17 @@ class Session {
     location: map['location'] as String?,
     speaker: map['speaker'] as String?,
     note: map['note'] as String?,
+    activityName: map['activity_name'] as String?,
+    tags: ((map['tags'] as String?) ?? '')
+        .split(',')
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList(),
+    exportedAt: map['exported_at'] == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(map['exported_at']! as int),
+    exportPath: map['export_path'] as String?,
+    exportSizeBytes: map['export_size_bytes'] as int?,
     createdAt: DateTime.fromMillisecondsSinceEpoch(map['created_at']! as int),
     recordingStartedAt: map['recording_started_at'] == null
         ? null
@@ -125,9 +165,22 @@ class Session {
 }
 
 class SessionSummary {
-  const SessionSummary({required this.session, required this.photoCount});
+  const SessionSummary({
+    required this.session,
+    required this.photoCount,
+    this.eventCount = 0,
+    this.transcriptCount = 0,
+    this.coverPath,
+    this.hasOfflineTranscript = false,
+    this.hasCloudTranscript = false,
+  });
   final Session session;
   final int photoCount;
+  final int eventCount;
+  final int transcriptCount;
+  final String? coverPath;
+  final bool hasOfflineTranscript;
+  final bool hasCloudTranscript;
 }
 
 class AudioSegment {
@@ -176,6 +229,7 @@ class TimelineEvent {
     this.note,
     this.photoPath,
     this.thumbnailPath,
+    this.photoSource,
   });
   final String id;
   final String sessionId;
@@ -185,17 +239,24 @@ class TimelineEvent {
   final String? note;
   final String? photoPath;
   final String? thumbnailPath;
+  final String? photoSource;
   final DateTime createdAt;
 
-  TimelineEvent copyWith({String? title, String? note}) => TimelineEvent(
+  TimelineEvent copyWith({
+    String? title,
+    String? note,
+    int? offsetMs,
+    String? photoSource,
+  }) => TimelineEvent(
     id: id,
     sessionId: sessionId,
     type: type,
-    offsetMs: offsetMs,
+    offsetMs: offsetMs ?? this.offsetMs,
     title: title ?? this.title,
     note: note ?? this.note,
     photoPath: photoPath,
     thumbnailPath: thumbnailPath,
+    photoSource: photoSource ?? this.photoSource,
     createdAt: createdAt,
   );
 
@@ -208,6 +269,7 @@ class TimelineEvent {
     'note': note,
     'photo_path': photoPath,
     'thumbnail_path': thumbnailPath,
+    'photo_source': photoSource,
     'created_at': createdAt.millisecondsSinceEpoch,
   };
 
@@ -220,6 +282,7 @@ class TimelineEvent {
     note: map['note'] as String?,
     photoPath: map['photo_path'] as String?,
     thumbnailPath: map['thumbnail_path'] as String?,
+    photoSource: map['photo_source'] as String?,
     createdAt: DateTime.fromMillisecondsSinceEpoch(map['created_at']! as int),
   );
 }
@@ -258,4 +321,18 @@ class TranscriptSegment {
         text: map['text']! as String,
         speakerLabel: map['speaker_label'] as String?,
       );
+}
+
+class SessionSearchResult {
+  const SessionSearchResult({
+    required this.session,
+    required this.contextText,
+    this.offsetMs,
+    this.kind = '记录',
+  });
+
+  final Session session;
+  final String contextText;
+  final int? offsetMs;
+  final String kind;
 }

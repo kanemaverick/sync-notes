@@ -1,17 +1,21 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 
-import '../core/timeline_clock.dart';
+import '../core/theme/app_theme.dart';
+import '../core/widgets/app_states.dart';
 import '../data/app_repository.dart';
 import '../models/entities.dart';
 import '../services/ai_processing_service.dart';
 import '../services/background_recording_service.dart';
 import '../services/cloud_transcription_settings.dart';
 import '../services/media_storage.dart';
+import '../widgets/record_session_card.dart';
+import 'ai_note_screen.dart';
 import 'create_session_screen.dart';
+import 'export_center_screen.dart';
 import 'live_record_screen.dart';
 import 'review_screen.dart';
-import 'transcription_settings_screen.dart';
+import 'search_screen.dart';
+import 'settings_hub_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
@@ -20,6 +24,7 @@ class HomeScreen extends StatefulWidget {
     required this.recording,
     required this.cloudSettings,
     required this.aiService,
+    this.sessionLoader,
     super.key,
   });
   final AppRepository repository;
@@ -27,22 +32,29 @@ class HomeScreen extends StatefulWidget {
   final BackgroundRecordingService recording;
   final CloudTranscriptionSettingsStore cloudSettings;
   final AiProcessingService aiService;
+  final Future<List<SessionSummary>> Function()? sessionLoader;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  late Future<List<SessionSummary>> _sessions;
+  int _index = 0;
+  int _recordsRevision = 0;
 
-  @override
-  void initState() {
-    super.initState();
-    _reload();
-  }
-
-  void _reload() {
-    _sessions = widget.repository.listSessionSummaries();
+  Future<void> _review(Session session, [int? offsetMs]) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ReviewScreen(
+          session: session,
+          repository: widget.repository,
+          storage: widget.storage,
+          aiService: widget.aiService,
+          initialPositionMs: offsetMs,
+        ),
+      ),
+    );
+    if (mounted) setState(() => _recordsRevision++);
   }
 
   Future<void> _create() async {
@@ -52,7 +64,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     if (!mounted || session == null) return;
-    await Navigator.of(context).push(
+    final completed = await Navigator.of(context).push<Session>(
       MaterialPageRoute(
         builder: (_) => LiveRecordScreen(
           session: session,
@@ -64,155 +76,384 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
-    setState(_reload);
+    if (!mounted) return;
+    if (completed != null) {
+      await _review(completed);
+    } else {
+      setState(() => _recordsRevision++);
+    }
   }
 
-  Future<void> _open(Session session) async {
+  Future<void> _open(Session session, [int? offsetMs]) async {
     final active =
         session.status == SessionStatus.recording ||
         session.status == SessionStatus.paused;
-    await Navigator.of(context).push(
+    if (!active) {
+      await _review(session, offsetMs);
+      return;
+    }
+    final completed = await Navigator.of(context).push<Session>(
       MaterialPageRoute(
-        builder: (_) => active
-            ? LiveRecordScreen(
-                session: session,
-                repository: widget.repository,
-                storage: widget.storage,
-                recording: widget.recording,
-                aiService: widget.aiService,
-                autoStart: false,
-              )
-            : ReviewScreen(
-                session: session,
-                repository: widget.repository,
-                storage: widget.storage,
-                aiService: widget.aiService,
-              ),
+        builder: (_) => LiveRecordScreen(
+          session: session,
+          repository: widget.repository,
+          storage: widget.storage,
+          recording: widget.recording,
+          aiService: widget.aiService,
+          autoStart: false,
+        ),
       ),
     );
-    setState(_reload);
+    if (!mounted) return;
+    if (completed != null) {
+      await _review(completed);
+    } else {
+      setState(() => _recordsRevision++);
+    }
   }
 
-  Future<void> _openSettings() async {
-    await Navigator.of(context).push(
+  Future<void> _resumeRecovered(Session session) async {
+    final completed = await Navigator.of(context).push<Session>(
       MaterialPageRoute(
-        builder: (_) =>
-            TranscriptionSettingsScreen(store: widget.cloudSettings),
+        builder: (_) => LiveRecordScreen(
+          session: session,
+          repository: widget.repository,
+          storage: widget.storage,
+          recording: widget.recording,
+          aiService: widget.aiService,
+          autoStart: true,
+          resumeOffsetMs: session.durationMs,
+        ),
       ),
     );
+    if (!mounted) return;
+    if (completed != null) {
+      await _review(completed);
+    } else {
+      setState(() => _recordsRevision++);
+    }
+  }
+
+  Future<void> _finalizeRecovered(Session session) async {
+    await widget.repository.updateSession(
+      session.copyWith(status: SessionStatus.completed),
+    );
+    if (mounted) {
+      setState(() => _recordsRevision++);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已将恢复数据保存为已结束记录')));
+    }
+  }
+
+  Future<void> _openExport(Session session) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AiNoteScreen(
+          session: session,
+          repository: widget.repository,
+          storage: widget.storage,
+          aiService: widget.aiService,
+        ),
+      ),
+    );
+    if (mounted) setState(() => _recordsRevision++);
   }
 
   @override
   Widget build(BuildContext context) {
+    final page = switch (_index) {
+      0 => _RecordsPage(
+        key: ValueKey(_recordsRevision),
+        repository: widget.repository,
+        sessionLoader: widget.sessionLoader,
+        onCreate: _create,
+        onOpen: _open,
+        onSearch: () => setState(() => _index = 1),
+        onResumeRecovered: _resumeRecovered,
+        onFinalizeRecovered: _finalizeRecovered,
+      ),
+      1 => SearchScreen(repository: widget.repository, onOpen: _open),
+      2 => ExportCenterScreen(
+        repository: widget.repository,
+        onOpen: _openExport,
+      ),
+      _ => SettingsHubScreen(cloudSettings: widget.cloudSettings),
+    };
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('同步讲记'),
-        actions: [
-          IconButton(
-            onPressed: _openSettings,
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: '实时转写设置',
+      body: page,
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _index,
+        onDestinationSelected: (value) => setState(() => _index = value),
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.mic_none_rounded),
+            selectedIcon: Icon(Icons.mic_rounded),
+            label: '记录',
+          ),
+          NavigationDestination(icon: Icon(Icons.search_rounded), label: '搜索'),
+          NavigationDestination(
+            icon: Icon(Icons.inventory_2_outlined),
+            selectedIcon: Icon(Icons.inventory_2_rounded),
+            label: '资料包',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.settings_outlined),
+            selectedIcon: Icon(Icons.settings_rounded),
+            label: '设置',
           ),
         ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _create,
-        icon: const Icon(Icons.mic_rounded),
-        label: const Text('开始新记录'),
-      ),
-      body: FutureBuilder<List<SessionSummary>>(
-        future: _sessions,
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return _CenteredMessage(
-              icon: Icons.error_outline,
-              title: '记录加载失败',
-              detail: '${snapshot.error}',
-            );
-          }
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final sessions = snapshot.data!;
-          if (sessions.isEmpty) {
-            return const _CenteredMessage(
-              icon: Icons.auto_stories_outlined,
-              title: '还没有记录',
-              detail: '开始录音后，可以低干扰地拍照和标记重点。',
-            );
-          }
-          return RefreshIndicator(
-            onRefresh: () async {
-              setState(_reload);
-              await _sessions;
-            },
-            child: ListView.separated(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
-              itemCount: sessions.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 12),
-              itemBuilder: (context, index) {
-                final summary = sessions[index];
-                final session = summary.session;
-                final active =
-                    session.status == SessionStatus.recording ||
-                    session.status == SessionStatus.paused;
-                return Card(
-                  child: ListTile(
-                    contentPadding: const EdgeInsets.all(16),
-                    onTap: () => _open(session),
-                    leading: CircleAvatar(
-                      backgroundColor: active ? Colors.red.shade100 : null,
-                      child: Icon(active ? Icons.graphic_eq : Icons.notes),
-                    ),
-                    title: Text(
-                      session.title,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    subtitle: Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Text(
-                        '${session.sceneType.label} · ${DateFormat('MM月dd日 HH:mm').format(session.createdAt)}\n'
-                        '${formatDuration(session.durationMs)} · ${summary.photoCount}张照片 · ${session.aiStatus == AiStatus.completed ? '已生成整理包' : '未生成整理包'}',
-                      ),
-                    ),
-                    trailing: active
-                        ? const Chip(label: Text('进行中'))
-                        : const Icon(Icons.chevron_right),
-                  ),
-                );
-              },
-            ),
-          );
-        },
       ),
     );
   }
 }
 
-class _CenteredMessage extends StatelessWidget {
-  const _CenteredMessage({
-    required this.icon,
-    required this.title,
-    required this.detail,
+class _RecordsPage extends StatefulWidget {
+  const _RecordsPage({
+    required this.repository,
+    required this.onCreate,
+    required this.onOpen,
+    required this.onSearch,
+    required this.onResumeRecovered,
+    required this.onFinalizeRecovered,
+    this.sessionLoader,
+    super.key,
   });
-  final IconData icon;
-  final String title;
-  final String detail;
+  final AppRepository repository;
+  final VoidCallback onCreate;
+  final Future<void> Function(Session session, [int? offsetMs]) onOpen;
+  final VoidCallback onSearch;
+  final Future<void> Function(Session session) onResumeRecovered;
+  final Future<void> Function(Session session) onFinalizeRecovered;
+  final Future<List<SessionSummary>> Function()? sessionLoader;
 
   @override
-  Widget build(BuildContext context) => Center(
-    child: Padding(
-      padding: const EdgeInsets.all(32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+  State<_RecordsPage> createState() => _RecordsPageState();
+}
+
+class _RecordsPageState extends State<_RecordsPage> {
+  late Future<List<SessionSummary>> _sessions;
+  SceneType? _scene;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  void _reload() => _sessions =
+      widget.sessionLoader?.call() ?? widget.repository.listSessionSummaries();
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 56, color: Theme.of(context).colorScheme.outline),
-          const SizedBox(height: 16),
-          Text(title, style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 8),
-          Text(detail, textAlign: TextAlign.center),
+          Text('同步讲记'),
+          Text(
+            '让讲解、照片与思考保持同步',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w400),
+          ),
         ],
       ),
+      actions: [
+        IconButton(
+          onPressed: widget.onSearch,
+          icon: const Icon(Icons.search_rounded),
+          tooltip: '搜索',
+        ),
+        const SizedBox(width: 4),
+      ],
+    ),
+    floatingActionButton: FloatingActionButton.extended(
+      onPressed: widget.onCreate,
+      icon: const Icon(Icons.mic_rounded),
+      label: const Text('新建记录'),
+    ),
+    body: FutureBuilder<List<SessionSummary>>(
+      future: _sessions,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return AppErrorState(
+            title: '记录加载失败',
+            message: '${snapshot.error}',
+            onRetry: () => setState(_reload),
+          );
+        }
+        if (!snapshot.hasData) return const AppLoadingState(label: '正在读取本地记录');
+        final all = snapshot.data!;
+        final active = all
+            .where(
+              (item) =>
+                  item.session.status == SessionStatus.recording ||
+                  item.session.status == SessionStatus.paused,
+            )
+            .toList();
+        final recovered = all
+            .where((item) => item.session.status == SessionStatus.interrupted)
+            .toList();
+        final filtered = all
+            .where((item) => _scene == null || item.session.sceneType == _scene)
+            .toList();
+        if (all.isEmpty) {
+          return AppEmptyState(
+            icon: Icons.auto_stories_outlined,
+            title: '从第一条讲记开始',
+            message: '持续录音时拍照、标重点和记疑问，结束后所有内容会自动对齐。',
+            actionLabel: '新建记录',
+            onAction: widget.onCreate,
+          );
+        }
+        return RefreshIndicator(
+          onRefresh: () async {
+            setState(_reload);
+            await _sessions;
+          },
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              4,
+              AppSpacing.lg,
+              104,
+            ),
+            children: [
+              if (active.isNotEmpty) ...[
+                Text('正在进行', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 10),
+                ...active.map(
+                  (item) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: RecordSessionCard(
+                      summary: item,
+                      onTap: () => widget.onOpen(item.session),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+              ],
+              if (recovered.isNotEmpty) ...[
+                Text('已恢复的记录', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 10),
+                ...recovered.map(
+                  (item) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Card(
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.tertiaryContainer.withValues(alpha: 0.45),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Row(
+                              children: [
+                                Icon(Icons.restore_rounded),
+                                SizedBox(width: 8),
+                                Text(
+                                  '发现一条未正常结束的记录',
+                                  style: TextStyle(fontWeight: FontWeight.w700),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              '${item.session.title}\n已保存 ${item.session.durationMs ~/ 60000} 分钟音频和 ${item.photoCount} 张照片',
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton(
+                                    onPressed: () =>
+                                        widget.onOpen(item.session),
+                                    child: const Text('查看详情'),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: FilledButton(
+                                    onPressed: () =>
+                                        widget.onResumeRecovered(item.session),
+                                    child: const Text('继续记录'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            SizedBox(
+                              width: double.infinity,
+                              child: TextButton(
+                                onPressed: () =>
+                                    widget.onFinalizeRecovered(item.session),
+                                child: const Text('结束并保存现有数据'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+              ],
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '最近记录',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ),
+                  PopupMenuButton<SceneType?>(
+                    initialValue: _scene,
+                    tooltip: '按场景筛选',
+                    onSelected: (value) => setState(() => _scene = value),
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(value: null, child: Text('全部场景')),
+                      ...SceneType.values.map(
+                        (scene) => PopupMenuItem(
+                          value: scene,
+                          child: Text(scene.label),
+                        ),
+                      ),
+                    ],
+                    child: Chip(
+                      avatar: const Icon(Icons.tune_rounded, size: 17),
+                      label: Text(_scene?.label ?? '全部'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              if (filtered.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.only(top: 48),
+                  child: AppEmptyState(
+                    icon: Icons.filter_alt_off_rounded,
+                    title: '这个场景还没有记录',
+                    message: '切换筛选条件查看其他记录。',
+                  ),
+                )
+              else
+                ...filtered
+                    .where(
+                      (item) =>
+                          !active.contains(item) && !recovered.contains(item),
+                    )
+                    .map(
+                      (item) => Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: RecordSessionCard(
+                          summary: item,
+                          onTap: () => widget.onOpen(item.session),
+                        ),
+                      ),
+                    ),
+            ],
+          ),
+        );
+      },
     ),
   );
 }

@@ -33,23 +33,24 @@ class CloudTranscriptionConfig {
 
 class CloudTranscriptionSettingsStore {
   CloudTranscriptionSettingsStore({
-    SharedPreferencesAsync? preferences,
+    this.preferences,
     this.bundledConfig = bundledCloudTranscriptionConfig,
-  }) : _preferences = preferences ?? SharedPreferencesAsync();
+  });
 
   static const _enabledKey = 'cloud_asr.enabled';
   static const _proxyUrlKey = 'cloud_asr.proxy_url';
   static const _accessTokenKey = 'cloud_asr.access_token';
 
-  final SharedPreferencesAsync _preferences;
+  SharedPreferencesAsync? preferences;
+  SharedPreferencesAsync get _prefs => preferences ??= SharedPreferencesAsync();
   final CloudTranscriptionConfig bundledConfig;
 
   bool get hasBundledConfig => bundledConfig.isConfigured;
 
   Future<CloudTranscriptionConfig> load() async {
-    final savedEnabled = await _preferences.getBool(_enabledKey);
-    final savedProxyUrl = await _preferences.getString(_proxyUrlKey);
-    final savedAccessToken = await _preferences.getString(_accessTokenKey);
+    final savedEnabled = await _prefs.getBool(_enabledKey);
+    final savedProxyUrl = await _prefs.getString(_proxyUrlKey);
+    final savedAccessToken = await _prefs.getString(_accessTokenKey);
     return resolveCloudTranscriptionConfig(
       bundledConfig: bundledConfig,
       savedEnabled: savedEnabled,
@@ -59,9 +60,9 @@ class CloudTranscriptionSettingsStore {
   }
 
   Future<void> save(CloudTranscriptionConfig config) async {
-    await _preferences.setBool(_enabledKey, config.enabled);
-    await _preferences.setString(_proxyUrlKey, config.proxyUrl.trim());
-    await _preferences.setString(_accessTokenKey, config.accessToken.trim());
+    await _prefs.setBool(_enabledKey, config.enabled);
+    await _prefs.setString(_proxyUrlKey, config.proxyUrl.trim());
+    await _prefs.setString(_accessTokenKey, config.accessToken.trim());
   }
 
   Future<void> restoreBundledConfig() async {

@@ -1,3 +1,4 @@
+import '../core/timeline_clock.dart';
 import '../models/entities.dart';
 import 'illustrated_note.dart';
 
@@ -19,12 +20,14 @@ class PhotoAiContext {
     required this.ocrText,
     required this.nearbyTranscript,
     this.userNote,
+    this.deviceTime,
   });
   final String filePath;
   final int offsetMs;
   final String ocrText;
   final String nearbyTranscript;
   final String? userNote;
+  final DateTime? deviceTime;
 }
 
 class AiProcessingInput {
@@ -108,17 +111,23 @@ String buildCodexAnalysisPrompt(Session session) {
       '图文实习记录',
       '需要补查的专业术语',
     ],
+    SceneType.meeting => ['会议目标', '讨论要点', '决定事项', '待办与负责人', '分歧和待确认项'],
+    SceneType.interview => ['访谈背景', '核心回答', '关键事实与案例', '有代表性的原话', '待追问与待核实项'],
     SceneType.custom => ['内容概览', '关键节点', '图片与讲解对应', '疑问与待核实项'],
   };
   final location = session.location?.trim();
   final speaker = session.speaker?.trim();
   final note = session.note?.trim();
+  final activityName = session.activityName?.trim();
   final buffer = StringBuffer()
     ..writeln('请分析这个“同步讲记”ZIP，生成一份准确、可核查的中文图文笔记。')
     ..writeln()
     ..writeln('记录信息：')
     ..writeln('- 标题：${session.title}')
     ..writeln('- 场景：${session.sceneType.label}');
+  if (activityName != null && activityName.isNotEmpty) {
+    buffer.writeln('- 课程或活动：$activityName');
+  }
   if (location != null && location.isNotEmpty) {
     buffer.writeln('- 地点：$location');
   }
@@ -128,12 +137,16 @@ String buildCodexAnalysisPrompt(Session session) {
   if (note != null && note.isNotEmpty) {
     buffer.writeln('- 用户备注：$note');
   }
+  if (session.tags.isNotEmpty) {
+    buffer.writeln('- 标签：${session.tags.join('、')}');
+  }
   buffer
     ..writeln()
     ..writeln('请先读取：')
     ..writeln('1. note.md：按时间整理的转写初稿、照片引用和用户标记。')
     ..writeln('2. manifest.json：场景信息、时间节点、照片偏移和文件对应关系。')
     ..writeln('3. images/：现场原始照片；请自行观察并在必要时做OCR。')
+    ..writeln('4. audio/：原始WAV分片；当转写不确定时，可结合原始录音核对。')
     ..writeln()
     ..writeln('整理规则：')
     ..writeln('1. 以 offsetMs 和时间戳恢复讲解、照片、章节、重点和疑问之间的关系。')
@@ -143,6 +156,9 @@ String buildCodexAnalysisPrompt(Session session) {
     ..writeln('5. 不要把照片观察或AI推测改写成老师原话；证据不足时明确说明，不要编造。')
     ..writeln('6. 优先处理“重点”和“没听懂”节点；结合节点前后内容解释，仍不确定的列入待核实清单。')
     ..writeln('7. 输出一份结构清楚、可直接保存的 Markdown 文档，并保留重要时间戳。')
+    ..writeln(
+      '8. 节点同时提供 offsetMs（可播放位置）和 deviceTime（设备实际时间），暂停期间必须保留设备时间差，不要把它压缩掉。',
+    )
     ..writeln()
     ..writeln('本场景建议输出结构：');
   for (final section in expectedSections) {
@@ -165,22 +181,20 @@ void _writeChronologicalIllustratedNotes(
       items.add((
         offsetMs: event.offsetMs,
         priority: 0,
-        markdown:
-            '### ${event.title ?? '未命名章节'} · ${_formatOffset(event.offsetMs)}',
+        markdown: '### ${event.title ?? '未命名章节'} · ${_eventTime(event)}',
       ));
     } else if (event.type == TimelineEventType.highlight) {
       items.add((
         offsetMs: event.offsetMs,
         priority: 3,
         markdown:
-            '- **[用户标记·重点]** ${_formatOffset(event.offsetMs)} ${event.note ?? '此处需重点复习。'}',
+            '- **[用户标记·重点]** ${_eventTime(event)} ${event.note ?? '此处需重点复习。'}',
       ));
     } else if (event.type == TimelineEventType.question) {
       items.add((
         offsetMs: event.offsetMs,
         priority: 3,
-        markdown:
-            '- **[用户标记·没听懂]** ${_formatOffset(event.offsetMs)} 需结合前后转写重新解释。',
+        markdown: '- **[用户标记·没听懂]** ${_eventTime(event)} 需结合前后转写重新解释。',
       ));
     } else if (event.type == TimelineEventType.text ||
         event.type == TimelineEventType.interruption) {
@@ -189,7 +203,7 @@ void _writeChronologicalIllustratedNotes(
         items.add((
           offsetMs: event.offsetMs,
           priority: 3,
-          markdown: '- **[记录]** ${_formatOffset(event.offsetMs)} $content',
+          markdown: '- **[记录]** ${_eventTime(event)} $content',
         ));
       }
     }
@@ -219,7 +233,7 @@ void _writeChronologicalIllustratedNotes(
       priority: 2,
       markdown:
           '![${markdownEscapeAlt(caption)}]($assetPath)\n\n'
-          '*[${EvidenceKind.directlyObserved.label}] ${_formatOffset(photo.offsetMs)}：$caption*'
+          '*[${EvidenceKind.directlyObserved.label}] ${_photoTime(photo)}：$caption*'
           '${nearby.isEmpty ? '' : '\n\n> 附近讲解：$nearby'}',
     ));
   }
@@ -253,6 +267,12 @@ String _formatOffset(int milliseconds) {
       : '$minuteText:$secondText';
 }
 
+String _eventTime(TimelineEvent event) =>
+    '${_formatOffset(event.offsetMs)} · 设备时间 ${formatDeviceTimestamp(event.createdAt)}';
+
+String _photoTime(PhotoAiContext photo) =>
+    '${_formatOffset(photo.offsetMs)} · 设备时间 ${photo.deviceTime == null ? '未知' : formatDeviceTimestamp(photo.deviceTime!)}';
+
 List<PhotoAiContext> buildPhotoContexts({
   required List<TimelineEvent> events,
   required List<TranscriptSegment> transcripts,
@@ -275,6 +295,7 @@ List<PhotoAiContext> buildPhotoContexts({
           ocrText: '',
           nearbyTranscript: nearby,
           userNote: photo.note,
+          deviceTime: photo.createdAt,
         );
       })
       .toList();

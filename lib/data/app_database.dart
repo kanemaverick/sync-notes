@@ -16,7 +16,7 @@ class AppDatabase {
     final db = await resolvedFactory.openDatabase(
       databasePath,
       options: OpenDatabaseOptions(
-        version: 1,
+        version: 3,
         onConfigure: (database) => database.execute('PRAGMA foreign_keys = ON'),
         onCreate: (database, _) async {
           await database.execute('''
@@ -27,6 +27,11 @@ class AppDatabase {
               location TEXT,
               speaker TEXT,
               note TEXT,
+              activity_name TEXT,
+              tags TEXT NOT NULL DEFAULT '',
+              exported_at INTEGER,
+              export_path TEXT,
+              export_size_bytes INTEGER,
               created_at INTEGER NOT NULL,
               recording_started_at INTEGER,
               duration_ms INTEGER NOT NULL DEFAULT 0,
@@ -55,6 +60,7 @@ class AppDatabase {
               note TEXT,
               photo_path TEXT,
               thumbnail_path TEXT,
+              photo_source TEXT,
               created_at INTEGER NOT NULL
             )
           ''');
@@ -75,10 +81,63 @@ class AppDatabase {
             'CREATE INDEX audio_session_sequence ON audio_segments(session_id, sequence)',
           );
         },
+        onUpgrade: (database, oldVersion, newVersion) async {
+          if (oldVersion < 2) {
+            await _addColumnIfMissing(
+              database,
+              'sessions',
+              'activity_name',
+              'TEXT',
+            );
+            await _addColumnIfMissing(
+              database,
+              'sessions',
+              'tags',
+              "TEXT NOT NULL DEFAULT ''",
+            );
+            await _addColumnIfMissing(
+              database,
+              'timeline_events',
+              'photo_source',
+              'TEXT',
+            );
+          }
+          if (oldVersion < 3) {
+            await _addColumnIfMissing(
+              database,
+              'sessions',
+              'exported_at',
+              'INTEGER',
+            );
+            await _addColumnIfMissing(
+              database,
+              'sessions',
+              'export_path',
+              'TEXT',
+            );
+            await _addColumnIfMissing(
+              database,
+              'sessions',
+              'export_size_bytes',
+              'INTEGER',
+            );
+          }
+        },
       ),
     );
     return AppDatabase._(db);
   }
 
   Future<void> close() => db.close();
+}
+
+Future<void> _addColumnIfMissing(
+  Database database,
+  String table,
+  String column,
+  String definition,
+) async {
+  final columns = await database.rawQuery('PRAGMA table_info($table)');
+  if (columns.any((item) => item['name'] == column)) return;
+  await database.execute('ALTER TABLE $table ADD COLUMN $column $definition');
 }

@@ -50,6 +50,7 @@ class SessionPlayer {
 
   Future<void> play() => _player.play();
   Future<void> pause() => _player.pause();
+  Future<void> setSpeed(double speed) => _player.setSpeed(speed);
 
   Future<void> seekGlobal(int positionMs) async {
     final target = _mapper.mapGlobalPosition(positionMs);

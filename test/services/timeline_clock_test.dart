@@ -37,4 +37,11 @@ void main() {
     source.advance(1500);
     expect(await clock.offsetMs(), 43500);
   });
+
+  test('设备时间格式保留日期与秒级精度', () {
+    expect(
+      formatDeviceTimestamp(DateTime(2026, 8, 6, 14, 3, 9)),
+      '2026-08-06 14:03:09',
+    );
+  });
 }

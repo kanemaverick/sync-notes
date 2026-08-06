@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'core/theme/app_theme.dart';
 import 'data/app_database.dart';
 import 'data/app_repository.dart';
 import 'screens/home_screen.dart';
@@ -49,34 +50,12 @@ class SyncNotesApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const seed = Color(0xFF426A5A);
     return MaterialApp(
       title: '同步讲记',
       debugShowCheckedModeBanner: false,
       themeMode: ThemeMode.system,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: seed,
-          brightness: Brightness.light,
-        ),
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFFF7F8F6),
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(),
-        ),
-        cardTheme: const CardThemeData(margin: EdgeInsets.zero),
-      ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: seed,
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(),
-        ),
-        cardTheme: const CardThemeData(margin: EdgeInsets.zero),
-      ),
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
       home: HomeScreen(
         repository: repository,
         storage: storage,

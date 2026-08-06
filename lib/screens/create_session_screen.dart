@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 
+import '../core/theme/app_theme.dart';
 import '../data/app_repository.dart';
 import '../models/entities.dart';
 
@@ -16,7 +18,7 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
   final _formKey = GlobalKey<FormState>();
   final _title = TextEditingController();
   final _location = TextEditingController();
-  final _speaker = TextEditingController();
+  final _activityName = TextEditingController();
   final _note = TextEditingController();
   SceneType _scene = SceneType.classroom;
   bool _saving = false;
@@ -25,7 +27,7 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
   void dispose() {
     _title.dispose();
     _location.dispose();
-    _speaker.dispose();
+    _activityName.dispose();
     _note.dispose();
     super.dispose();
   }
@@ -33,14 +35,18 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _saving = true);
+    final now = DateTime.now();
+    final title = _title.text.trim().isEmpty
+        ? '${_scene.defaultTitlePrefix}记录 · ${DateFormat('yyyy-MM-dd HH:mm').format(now)}'
+        : _title.text.trim();
     final session = Session(
       id: const Uuid().v4(),
-      title: _title.text.trim(),
+      title: title,
       sceneType: _scene,
       location: _nullable(_location.text),
-      speaker: _nullable(_speaker.text),
       note: _nullable(_note.text),
-      createdAt: DateTime.now(),
+      activityName: _nullable(_activityName.text),
+      createdAt: now,
       durationMs: 0,
       status: SessionStatus.draft,
       aiStatus: AiStatus.notStarted,
@@ -54,69 +60,91 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('创建记录')),
+      appBar: AppBar(title: const Text('新建记录')),
       body: Form(
         key: _formKey,
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.lg,
+            8,
+            AppSpacing.lg,
+            32,
+          ),
           children: [
-            Card(
-              color: Theme.of(context).colorScheme.tertiaryContainer,
-              child: const Padding(
-                padding: EdgeInsets.all(16),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(Icons.privacy_tip_outlined),
-                    SizedBox(width: 12),
-                    Expanded(child: Text('请确认你已经获得讲解人许可，并遵守所在地区和场所的录音规定。')),
-                  ],
-                ),
+            Text('准备记录什么？', style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: 6),
+            Text(
+              '只需选择场景即可开始，其余内容稍后也能补充。',
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 24),
             TextFormField(
               controller: _title,
               autofocus: true,
               textInputAction: TextInputAction.next,
               decoration: const InputDecoration(
-                labelText: '标题 *',
-                hintText: '例如：材料力学第3讲',
+                labelText: '标题（可选）',
+                hintText: '留空将按场景和时间自动命名',
               ),
-              validator: (value) =>
-                  value == null || value.trim().isEmpty ? '请输入标题' : null,
             ),
             const SizedBox(height: 16),
-            DropdownButtonFormField<SceneType>(
-              initialValue: _scene,
-              decoration: const InputDecoration(labelText: '场景类型 *'),
-              items: SceneType.values
+            Text('场景', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: SceneType.values
                   .map(
-                    (scene) => DropdownMenuItem(
-                      value: scene,
-                      child: Text(scene.label),
+                    (scene) => ChoiceChip(
+                      label: Text(scene.label),
+                      selected: _scene == scene,
+                      onSelected: (_) => setState(() => _scene = scene),
                     ),
                   )
                   .toList(),
-              onChanged: (value) => setState(() => _scene = value!),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 22),
+            TextFormField(
+              controller: _activityName,
+              decoration: const InputDecoration(
+                labelText: '课程或活动名称（可选）',
+                prefixIcon: Icon(Icons.event_note_outlined),
+              ),
+            ),
+            const SizedBox(height: 12),
             TextFormField(
               controller: _location,
-              decoration: const InputDecoration(labelText: '地点（可选）'),
+              decoration: const InputDecoration(
+                labelText: '地点（可选）',
+                prefixIcon: Icon(Icons.location_on_outlined),
+              ),
             ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _speaker,
-              decoration: const InputDecoration(labelText: '老师或讲解人（可选）'),
-            ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             TextFormField(
               controller: _note,
               maxLines: 3,
-              decoration: const InputDecoration(labelText: '备注（可选）'),
+              decoration: const InputDecoration(labelText: '简短说明（可选）'),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 20),
+            Card(
+              color: Theme.of(
+                context,
+              ).colorScheme.tertiaryContainer.withValues(alpha: 0.55),
+              child: const Padding(
+                padding: EdgeInsets.all(14),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.privacy_tip_outlined, size: 20),
+                    SizedBox(width: 10),
+                    Expanded(child: Text('开始即表示你已获得讲解人许可，并会遵守所在地区和场所的录音规定。')),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
             FilledButton.icon(
               onPressed: _saving ? null : _submit,
               icon: _saving
@@ -127,7 +155,7 @@ class _CreateSessionScreenState extends State<CreateSessionScreen> {
                   : const Icon(Icons.mic),
               label: const Padding(
                 padding: EdgeInsets.symmetric(vertical: 14),
-                child: Text('开始记录'),
+                child: Text('开始录音'),
               ),
             ),
           ],

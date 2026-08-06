@@ -107,3 +107,14 @@ String formatDuration(int milliseconds) {
   }
   return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
 }
+
+/// Formats the device wall-clock timestamp kept on a timeline event.
+///
+/// `offsetMs` is intentionally still used for seeking audio. Showing both
+/// values lets a pause gap remain visible instead of collapsing wall time.
+String formatDeviceTimestamp(DateTime timestamp) {
+  final value = timestamp.toLocal();
+  String two(int number) => number.toString().padLeft(2, '0');
+  return '${value.year}-${two(value.month)}-${two(value.day)} '
+      '${two(value.hour)}:${two(value.minute)}:${two(value.second)}';
+}

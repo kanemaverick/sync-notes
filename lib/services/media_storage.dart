@@ -17,8 +17,12 @@ class StoredPhoto {
 }
 
 class MediaStorage {
+  MediaStorage({this.rootDirectory});
+
+  final Directory? rootDirectory;
+
   Future<Directory> sessionDirectory(String sessionId) async {
-    final support = await getApplicationSupportDirectory();
+    final support = rootDirectory ?? await getApplicationSupportDirectory();
     final directory = Directory(p.join(support.path, 'sessions', sessionId));
     await directory.create(recursive: true);
     return directory;
@@ -62,10 +66,17 @@ class MediaStorage {
   Future<void> writePendingGalleryImport({
     required String sessionId,
     required int offsetMs,
+    DateTime? deviceTime,
   }) async {
     final root = await sessionDirectory(sessionId);
     final file = File(p.join(root.path, 'pending_gallery_import.json'));
-    await file.writeAsString(jsonEncode({'offsetMs': offsetMs}), flush: true);
+    await file.writeAsString(
+      jsonEncode({
+        'offsetMs': offsetMs,
+        'deviceTimeMs': (deviceTime ?? DateTime.now()).millisecondsSinceEpoch,
+      }),
+      flush: true,
+    );
   }
 
   Future<int?> readPendingGalleryImportOffset(String sessionId) async {
@@ -76,10 +87,35 @@ class MediaStorage {
     return data['offsetMs'] as int?;
   }
 
+  Future<DateTime?> readPendingGalleryImportDeviceTime(String sessionId) async {
+    final root = await sessionDirectory(sessionId);
+    final file = File(p.join(root.path, 'pending_gallery_import.json'));
+    if (!await file.exists()) return null;
+    final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+    final milliseconds = data['deviceTimeMs'] as int?;
+    return milliseconds == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(milliseconds);
+  }
+
   Future<void> clearPendingGalleryImport(String sessionId) async {
     final root = await sessionDirectory(sessionId);
     final file = File(p.join(root.path, 'pending_gallery_import.json'));
     if (await file.exists()) await file.delete();
+  }
+
+  Future<void> deleteEventMedia(TimelineEvent event) async {
+    for (final path in [event.photoPath, event.thumbnailPath]) {
+      if (path == null) continue;
+      final file = File(path);
+      if (await file.exists()) await file.delete();
+    }
+  }
+
+  Future<void> deleteSessionMedia(String sessionId) async {
+    final support = rootDirectory ?? await getApplicationSupportDirectory();
+    final directory = Directory(p.join(support.path, 'sessions', sessionId));
+    if (await directory.exists()) await directory.delete(recursive: true);
   }
 
   Future<File> writeMarkdown({
@@ -102,6 +138,8 @@ class MediaStorage {
     required Session session,
     required String markdown,
     required List<TimelineEvent> events,
+    List<AudioSegment> audioSegments = const [],
+    List<TranscriptSegment> transcriptSegments = const [],
   }) async {
     final root = await sessionDirectory(session.id);
     final exports = Directory(p.join(root.path, 'exports'));
@@ -130,6 +168,14 @@ class MediaStorage {
           ..sort((a, b) => a.offsetMs.compareTo(b.offsetMs));
     final sortedEvents = [...events]
       ..sort((a, b) => a.offsetMs.compareTo(b.offsetMs));
+    final sortedAudioSegments = [...audioSegments]
+      ..sort((a, b) => a.sequence.compareTo(b.sequence));
+    final audioFiles = <String, String>{};
+    for (final segment in sortedAudioSegments) {
+      if (await File(segment.filePath).exists()) {
+        audioFiles[segment.id] = audioAssetRelativePath(segment);
+      }
+    }
     final photoFiles = <String, String>{
       for (var index = 0; index < photos.length; index++)
         photos[index].id: photoAssetRelativePath(
@@ -145,23 +191,55 @@ class MediaStorage {
     final manifestFile = File(p.join(root.path, 'export_manifest.json'));
     await manifestFile.writeAsString(
       const JsonEncoder.withIndent('  ').convert({
-        'sessionId': session.id,
-        'title': session.title,
-        'sceneType': session.sceneType.name,
-        'sceneTypeLabel': session.sceneType.label,
-        'location': session.location,
-        'speaker': session.speaker,
-        'sessionNote': session.note,
-        'durationMs': session.durationMs,
-        'generatedAt': DateTime.now().toIso8601String(),
+        'schemaVersion': 3,
+        'session': {
+          'id': session.id,
+          'title': session.title,
+          'sceneType': session.sceneType.name,
+          'sceneTypeLabel': session.sceneType.label,
+          'activityName': session.activityName,
+          'location': session.location,
+          'speaker': session.speaker,
+          'note': session.note,
+          'tags': session.tags,
+          'createdAt': session.createdAt.toIso8601String(),
+          'recordingStartedAt': session.recordingStartedAt?.toIso8601String(),
+          'durationMs': session.durationMs,
+        },
+        'audioSegments': [
+          for (final segment in sortedAudioSegments)
+            {
+              'id': segment.id,
+              'sequence': segment.sequence,
+              'timelineStartMs': segment.timelineStartMs,
+              'durationMs': segment.durationMs,
+              'fileName': p.basename(segment.filePath),
+              'file': audioFiles[segment.id],
+              'included': audioFiles.containsKey(segment.id),
+            },
+        ],
+        'transcriptSegments': [
+          for (final transcript in transcriptSegments)
+            {
+              'id': transcript.id,
+              'startMs': transcript.startMs,
+              'endMs': transcript.endMs,
+              'text': transcript.text,
+              'source': transcript.speakerLabel,
+            },
+        ],
         'events': [
           for (final event in sortedEvents)
             {
               'type': event.type.name,
               'typeLabel': event.type.label,
               'offsetMs': event.offsetMs,
+              'timelineMs': event.offsetMs,
+              'createdAt': event.createdAt.toIso8601String(),
+              'deviceTime': event.createdAt.toIso8601String(),
               'title': event.title,
               'note': event.note,
+              'photoSource': event.photoSource,
               'file': ?photoFiles[event.id],
             },
         ],
@@ -169,10 +247,19 @@ class MediaStorage {
           for (var index = 0; index < photos.length; index++)
             {
               'offsetMs': photos[index].offsetMs,
+              'createdAt': photos[index].createdAt.toIso8601String(),
+              'deviceTime': photos[index].createdAt.toIso8601String(),
               'note': photos[index].note,
+              'source': photos[index].photoSource,
               'file': photoAssetRelativePath(index, photos[index].photoPath!),
             },
         ],
+        'exportMetadata': {
+          'generatedAt': DateTime.now().toIso8601String(),
+          'format': 'sync-notes-codex-package',
+          'includesOriginalAudio': audioFiles.isNotEmpty,
+          'audioComplete': audioFiles.length == sortedAudioSegments.length,
+        },
       }),
       flush: true,
     );
@@ -182,6 +269,11 @@ class MediaStorage {
       await encoder.addFile(promptFile, 'CODEX_PROMPT.md');
       await encoder.addFile(noteFile, 'note.md');
       await encoder.addFile(manifestFile, 'manifest.json');
+      for (final segment in sortedAudioSegments) {
+        final relativePath = audioFiles[segment.id];
+        if (relativePath == null) continue;
+        await encoder.addFile(File(segment.filePath), relativePath);
+      }
       for (var index = 0; index < photos.length; index++) {
         final source = File(photos[index].photoPath!);
         if (await source.exists()) {

@@ -1,4 +1,9 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sync_notes/models/entities.dart';
 import 'package:sync_notes/services/media_storage.dart';
 
 void main() {
@@ -50,5 +55,96 @@ void main() {
         '.heic',
       );
     });
+  });
+
+  test('Codex ZIP包含提示词、笔记、结构化manifest和原始照片', () async {
+    final root = await Directory.systemTemp.createTemp('sync_notes_export_');
+    final photo = File('${root.path}/source.jpg');
+    await photo.writeAsBytes([0xff, 0xd8, 0xff, 0xd9]);
+    final audio = File('${root.path}/segment_source.wav');
+    await audio.writeAsBytes(List<int>.filled(64, 7));
+    final session = Session(
+      id: 'export-session',
+      title: '现场记录',
+      sceneType: SceneType.fieldVisit,
+      activityName: '水文仪器参观',
+      tags: const ['实习', '仪器'],
+      createdAt: DateTime(2026, 8, 6),
+      durationMs: 120000,
+      status: SessionStatus.completed,
+      aiStatus: AiStatus.completed,
+    );
+    final event = TimelineEvent(
+      id: 'photo-1',
+      sessionId: session.id,
+      type: TimelineEventType.photo,
+      offsetMs: 65000,
+      title: '设备正面',
+      photoPath: photo.path,
+      photoSource: 'gallery',
+      createdAt: DateTime(2026, 8, 6),
+    );
+    final storage = MediaStorage(rootDirectory: root);
+    final zip = await storage.exportIllustratedZip(
+      session: session,
+      markdown: '# 现场记录\n\n## 01:05\n\n![设备](images/photo_001.jpg)',
+      events: [event],
+      audioSegments: [
+        AudioSegment(
+          id: 'audio-1',
+          sessionId: 'export-session',
+          filePath: audio.path,
+          timelineStartMs: 0,
+          durationMs: 120000,
+          sequence: 0,
+        ),
+      ],
+      transcriptSegments: const [
+        TranscriptSegment(
+          id: 'text-1',
+          sessionId: 'export-session',
+          startMs: 60000,
+          endMs: 70000,
+          text: '这是流速测量设备',
+          speakerLabel: '本地初稿',
+        ),
+      ],
+    );
+    final archive = ZipDecoder().decodeBytes(await zip.readAsBytes());
+    final names = archive.files.map((file) => file.name).toSet();
+    expect(
+      names,
+      containsAll([
+        'CODEX_PROMPT.md',
+        'note.md',
+        'manifest.json',
+        'images/photo_001.jpg',
+        'audio/segment_0000.wav',
+      ]),
+    );
+    final manifestFile = archive.files.singleWhere(
+      (file) => file.name == 'manifest.json',
+    );
+    final manifest =
+        jsonDecode(utf8.decode(manifestFile.content as List<int>))
+            as Map<String, dynamic>;
+    expect(manifest['schemaVersion'], 3);
+    expect((manifest['audioSegments'] as List), hasLength(1));
+    expect(
+      (manifest['audioSegments'] as List).single['file'],
+      'audio/segment_0000.wav',
+    );
+    expect(manifest['exportMetadata']['includesOriginalAudio'], isTrue);
+    final audioEntry = archive.files.singleWhere(
+      (file) => file.name == 'audio/segment_0000.wav',
+    );
+    expect(audioEntry.content, List<int>.filled(64, 7));
+    expect((manifest['transcriptSegments'] as List).single['text'], '这是流速测量设备');
+    expect((manifest['photos'] as List).single['source'], 'gallery');
+    expect(
+      (manifest['events'] as List).single['deviceTime'],
+      '2026-08-06T00:00:00.000',
+    );
+    await root.delete(recursive: true);
   });
 }

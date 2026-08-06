@@ -1,12 +1,13 @@
-# 同步讲记（Flutter Android MVP）
+# 同步讲记（Flutter Android MVP · 1.1.1）
 
 一款面向课堂、专题讲座和实地参观的本地优先多模态记录工具。持续录音时可以低干扰拍照、标重点、记录疑问和切换章节；结束后，照片与标记会按可播放音频时间轴对齐。
 
 ## 当前实现
 
-- 中文 Material 3 界面，跟随系统深色/浅色模式；
-- 历史记录列表、空状态、错误状态、下拉刷新；
-- 创建记录：标题、场景、地点、讲解人、备注和录音合规提示；
+- 原创的安静、专业视觉系统，统一颜色、字号、间距、圆角与状态组件，跟随系统深色/浅色模式；
+- “记录 / 搜索 / 资料包 / 设置”四入口信息架构；首页包含欢迎信息、正在录音、异常恢复、场景筛选、代表照片与字幕/导出状态；
+- 创建记录：标题可空并自动命名，支持课堂、讲座、实地参观、会议、访谈和其他场景，以及活动名称、地点和简介；
+- 应用内全文搜索标题、场景、地点、简介、标签、字幕、章节、重点、疑问和图片说明，并可筛选场景、照片、重点和疑问；
 - Android 麦克风前台服务、持久通知、CPU wake lock；
 - 单一麦克风 PCM 流同时写入 16 kHz/16-bit/mono WAV 分片并送入本地 ASR，避免录音与字幕争抢麦克风；
 - 使用 `sherpa_onnx` 和随包中文流式模型实时显示离线字幕初稿，不需要网络或 API 密钥；
@@ -14,22 +15,26 @@
 - 云端连接失败时录音不停止，自动切换本地字幕并按2～30秒退避重连；暂停/继续会正常结束并重建云端会话；
 - 设置页只保存安全代理地址和代理令牌；腾讯云 AppID、SecretID、SecretKey 只存在于独立代理服务；
 - 服务 isolate 约每 5 分钟安全结束并创建新 WAV 分片，文件头每秒同步，异常退出后可恢复已落盘内容；
-- 暂停/继续不把暂停时长计入可播放时间轴，并把状态变化写入恢复清单；
+- 暂停/继续不把暂停时长计入可播放时间轴，同时保留每个节点的设备实际时间，并把暂停、继续和中断状态写入时间轴；
 - Android `SystemClock.elapsedRealtime()` 单调时钟通道，锁屏和修改系统时间不影响 offset；
 - 现场“照片”入口可选择 App 内 CameraX 相机拍照或从系统相册导入，期间录音服务独立继续；
 - Android 13+ 相册导入使用系统 Photo Picker，不申请广泛存储权限；Activity 被回收时可恢复待处理照片及原 offset；
 - 原始照片和 480px 缩略图写入应用私有持久目录；
 - 重点、疑问、章节、照片和中断事件时间轴；
+- 现场页新增独立备注、大点击区域、轻震动反馈、最近事件预览和非阻塞字幕状态；返回首页不会停止录音；
+- 内置相机支持闪光灯、前后镜头切换和点按对焦，并在权限申请前解释用途；
 - 多分片连续播放、±10 秒、拖动、点击事件 seek、附近节点高亮；
-- 照片大图、照片备注/章节编辑、确认后删除节点；删除节点不删除录音；
-- SQLite 四表、外键、索引和 Repository 层；
+- 记录详情使用“回顾 / 字幕 / 时间轴 / 资料包”四个内容 Tab；支持 0.75–2.0 倍速、字幕编辑、照片时间点调整、照片大图和节点编辑删除；
+- 可编辑记录标题、场景、地点、简介和标签；可明确确认后删除整条记录及本地媒体；
+- 异常恢复卡片可查看已保存音频/照片，并从既有连续时间和下一个 WAV 分片继续录制；
+- SQLite 四表、外键、索引和 Repository 层；schema v2 新增活动、标签和照片来源，v3 新增导出历史字段，自动迁移并保留旧记录；
 - App 启动时恢复未完成记录：同步服务清单、字幕和时间节点，并尝试读取未登记 WAV/旧版 m4a 分片时长；
 - `AiProcessingService` 接口、完整 AI 输入结构、离线 `MockAiProcessingService`；
 - 记录整理稿明确标注“老师明确讲过 / 照片直接可见 / AI推测 / 需要核实”；
 - 整理稿按时间合并转写、照片、章节、重点、疑问和备注，照片插入邻近讲解位置；
 - “整理与导出”页面渲染 Markdown 与本地图片，支持复制全文、分享 Markdown；
 - 不在手机端生成最终结论；按课堂、讲座、实地参观或自定义场景生成可直接交给 Codex 的整理提示词；
-- 导出 Codex 图文 ZIP：包含 `CODEX_PROMPT.md`、`note.md`、结构化 `manifest.json` 和按稳定相对路径整理的 `images/photo_NNN.ext` 原图；
+- 导出 Codex 图文 ZIP：包含 `CODEX_PROMPT.md`、`note.md`、schema v3 `manifest.json`、`audio/segment_XXXX.wav` 原始音频分片和按稳定相对路径整理的 `images/photo_NNN.ext` 原图；manifest 记录 Session、音频分片元数据、字幕、双时间轴事件、图片来源和导出元数据；
 - Android 与 iOS 工程骨架；MVP 的后台可靠性实现优先针对 Android。
 
 ## 未实现 / 已知限制
@@ -45,27 +50,31 @@
 - PCM WAV 约占 115 MB/小时；换取了单路采集、可恢复文件头和本地流式识别，长期使用前需要增加存储空间预警和结束后归档压缩；
 - `flutter_foreground_task` 10.0.0 仍会应用旧式 Kotlin Gradle Plugin；当前 Flutter 3.44.8 可成功构建，但 Flutter 已提示未来版本需升级插件的 Built-in Kotlin 支持；
 - iOS 已配置相机、麦克风说明和 `audio` background mode，但尚未进行 Xcode 真机签名与后台策略验证；
-- 图文 ZIP 当前包含整理稿与照片，不包含原始录音；私有媒体会在卸载 App 时被 Android 删除，重要录音仍需另行备份。
+- 图文 ZIP 已包含原始 WAV 分片；如果录音分片缺失，manifest 会将 `audioComplete` 标记为 `false`。私有媒体会在卸载 App 时被 Android 删除，重要录音仍需及时导出备份。
 
 ## 技术结构
 
 ```text
 lib/
-  core/       单调时钟、暂停映射、分片 seek 映射
+  core/       单调时钟、暂停映射、分片 seek 映射、主题和通用状态组件
   data/       SQLite schema 与 AppRepository
   models/     Session、AudioSegment、TimelineEvent、TranscriptSegment
   services/   前台 PCM/WAV、离线/腾讯云 ASR、恢复、媒体/ZIP、连续播放器、Mock AI
-  screens/    列表、创建、转写设置、现场、内置相机、回顾、AI笔记
-  widgets/    共用时间轴组件
+  screens/    首页导航、搜索、导出中心、设置、创建、现场、内置相机、详情和整理包
+  widgets/    记录卡片、快捷操作、时间轴和输入组件
 test/
   data/       数据库与重启持久化
   services/   offset、暂停、分片、seek、Mock AI
-  widgets/    创建页必填与合规提示
+  widgets/    首页导航、创建流程、详情 Tab、录音快捷操作与输入弹窗
 server/
   tencent_asr_proxy/  腾讯签名、凭证隔离和 WebSocket 中继服务
 ```
 
-媒体目录为 `ApplicationSupport/sessions/<sessionId>/`，包含 `audio/`、`photos/`、`thumbnails/`、`exports/`、`recording_manifest.json` 和 `ai_note.md`。结构化数据存入 `sync_notes.sqlite`。UI 不直接访问 SQLite。
+媒体目录为 `ApplicationSupport/sessions/<sessionId>/`，包含 `audio/`、`photos/`、`thumbnails/`、`exports/`、`recording_manifest.json` 和 `ai_note.md`。结构化数据存入 `sync_notes.sqlite`。每个事件同时保留 `offsetMs` 和设备实际时间 `createdAt/deviceTime`；前者用于播放跳转，后者用于区分暂停间隔。UI 不直接访问 SQLite，数据读写经过 `AppRepository`，媒体删除与导出经过 `MediaStorage`。
+
+## 数据库迁移
+
+1.1 将数据库从 v1 依次升级至 v3。v2 仅添加活动名称、标签和照片来源；v3 仅添加上次导出时间、路径和大小。迁移均使用 `ALTER TABLE ... ADD COLUMN`，原有 Session、AudioSegment、TimelineEvent 与 TranscriptSegment 的主键、外键和媒体路径不改变。迁移测试会先创建真实 v1 表并写入旧记录，再用当前代码升级和读回。
 
 ## 关键依赖
 
@@ -166,7 +175,7 @@ dart run bin/server.dart
 wss://你的域名/v1/asr/tencent/realtime
 ```
 
-随后进入 App 首页右上角“实时转写设置”，打开腾讯云转写并填写 WSS 地址与 `PROXY_AUTH_TOKEN`。不要把腾讯云密钥填写到 App。协议选择参考腾讯云当前的[实时语音识别 V2 WebSocket 文档](https://cloud.tencent.com/document/product/1093/131127)。
+随后进入 App 底部“设置”→“实时转写”，打开腾讯云转写并填写 WSS 地址与 `PROXY_AUTH_TOKEN`。不要把腾讯云密钥填写到 App。协议选择参考腾讯云当前的[实时语音识别 V2 WebSocket 文档](https://cloud.tencent.com/document/product/1093/131127)。
 
 ### 构建“安装后即用”的 APK
 
@@ -217,4 +226,4 @@ APK 中的代理访问令牌可被高级用户提取，因此它必须是可撤�
 
 1. 使用同一批真实课堂录音对腾讯云实时结果进行字错率与延迟验收，并接入录后大模型2.0校正；
 2. 60–120 分钟真机压力测试和厂商后台适配，用音频容器时间戳做自动漂移校准；
-3. 完整数据导出/备份（把原始音频也加入 ZIP）与安全恢复导入，并增加空间预警和归档压缩。
+3. 完整数据恢复导入、存储空间预警和导出包分片校验，并完善失败后的重试与续传。

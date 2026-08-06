@@ -30,6 +30,8 @@ class AiNoteScreen extends StatefulWidget {
 class _AiNoteScreenState extends State<AiNoteScreen> {
   String? _markdown;
   List<TimelineEvent> _events = [];
+  List<TranscriptSegment> _transcripts = [];
+  List<AudioSegment> _audioSegments = [];
   bool _processing = false;
   String? _error;
 
@@ -51,10 +53,18 @@ class _AiNoteScreenState extends State<AiNoteScreen> {
     final events = await widget.repository.listTimelineEvents(
       widget.session.id,
     );
+    final transcripts = await widget.repository.listTranscripts(
+      widget.session.id,
+    );
+    final audioSegments = await widget.repository.listAudioSegments(
+      widget.session.id,
+    );
     if (mounted) {
       setState(() {
         _markdown = isLegacyNote ? null : markdown;
         _events = events;
+        _transcripts = transcripts;
+        _audioSegments = audioSegments;
       });
     }
   }
@@ -87,6 +97,7 @@ class _AiNoteScreenState extends State<AiNoteScreen> {
         setState(() {
           _markdown = markdown;
           _events = events;
+          _transcripts = transcripts;
           _processing = false;
         });
       }
@@ -130,6 +141,17 @@ class _AiNoteScreenState extends State<AiNoteScreen> {
       session: widget.session,
       markdown: _markdown ?? '',
       events: _events,
+      transcriptSegments: _transcripts,
+      audioSegments: _audioSegments,
+    );
+    final latestSession =
+        await widget.repository.getSession(widget.session.id) ?? widget.session;
+    await widget.repository.updateSession(
+      latestSession.copyWith(
+        exportedAt: DateTime.now(),
+        exportPath: file.path,
+        exportSizeBytes: await file.length(),
+      ),
     );
     await SharePlus.instance.share(
       ShareParams(
@@ -222,7 +244,7 @@ class _AiNoteScreenState extends State<AiNoteScreen> {
                     ),
                     const SizedBox(height: 10),
                     const Text(
-                      '应用只汇总现场记录并生成整理提示词，不在手机端生成最终结论。导出 ZIP 后交给 Codex 分析。',
+                      '应用只汇总现场记录并生成整理提示词，不在手机端生成最终结论。导出 ZIP 后包含原始音频，可直接交给 Codex 分析。',
                       textAlign: TextAlign.center,
                     ),
                     if (_error != null)
