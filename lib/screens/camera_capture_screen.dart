@@ -13,8 +13,13 @@ class CameraCaptureResult {
 }
 
 class CameraCaptureScreen extends StatefulWidget {
-  const CameraCaptureScreen({required this.offsetProvider, super.key});
+  const CameraCaptureScreen({
+    required this.offsetProvider,
+    this.onCapture,
+    super.key,
+  });
   final Future<int> Function() offsetProvider;
+  final Future<void> Function(CameraCaptureResult)? onCapture;
 
   @override
   State<CameraCaptureScreen> createState() => _CameraCaptureScreenState();
@@ -28,6 +33,12 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
   FlashMode _flashMode = FlashMode.off;
   Object? _error;
   bool _capturing = false;
+  int _savedCount = 0;
+  double _zoom = 1;
+  double _minZoom = 1;
+  double _maxZoom = 1;
+  double _gestureZoom = 1;
+  int _cameraGeneration = 0;
 
   @override
   void initState() {
@@ -47,23 +58,34 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
   }
 
   Future<void> _initializeCamera(CameraDescription camera) async {
+    final generation = ++_cameraGeneration;
     final previous = _controller;
     _controller = null;
     await previous?.dispose();
     try {
       final controller = CameraController(
         camera,
-        ResolutionPreset.high,
+        ResolutionPreset.max,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
       await controller.initialize();
+      if (!mounted || generation != _cameraGeneration) {
+        await controller.dispose();
+        return;
+      }
+      _minZoom = await controller.getMinZoomLevel();
+      _maxZoom = (await controller.getMaxZoomLevel()).clamp(_minZoom, 8.0);
+      _zoom = 1.0.clamp(_minZoom, _maxZoom);
+      await controller.setZoomLevel(_zoom);
       try {
         await controller.setFlashMode(_flashMode);
       } catch (_) {
         _flashMode = FlashMode.off;
       }
-      if (!mounted) return controller.dispose();
+      if (!mounted || generation != _cameraGeneration) {
+        return controller.dispose();
+      }
       setState(() {
         _controller = controller;
         _error = null;
@@ -95,6 +117,18 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
     await _initializeCamera(_cameras[_cameraIndex]);
   }
 
+  Future<void> _setZoom(double value) async {
+    final controller = _controller;
+    if (controller == null || _capturing) return;
+    final zoom = value.clamp(_minZoom, _maxZoom);
+    try {
+      await controller.setZoomLevel(zoom);
+      if (mounted) setState(() => _zoom = zoom);
+    } catch (_) {
+      // Optical/digital zoom support varies by camera; capture still works.
+    }
+  }
+
   Future<void> _focus(
     TapDownDetails details,
     BoxConstraints constraints,
@@ -116,6 +150,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.inactive) {
+      _cameraGeneration++;
       _controller?.dispose();
       _controller = null;
     } else if (state == AppLifecycleState.resumed && _controller == null) {
@@ -131,15 +166,24 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
       final offset = await widget.offsetProvider();
       final capturedAt = DateTime.now();
       final file = await controller.takePicture();
+      final result = CameraCaptureResult(
+        temporaryPath: file.path,
+        offsetMs: offset,
+        capturedAt: capturedAt,
+      );
+      if (widget.onCapture != null) {
+        // Persist before showing success. Leaving the camera never discards a shot.
+        await widget.onCapture!(result);
+        if (mounted) {
+          setState(() {
+            _savedCount++;
+            _capturing = false;
+          });
+        }
+        return;
+      }
       if (mounted) {
-        Navigator.pop(
-          context,
-          CameraCaptureResult(
-            temporaryPath: file.path,
-            offsetMs: offset,
-            capturedAt: capturedAt,
-          ),
-        );
+        Navigator.pop(context, result);
       }
     } catch (error) {
       if (mounted) {
@@ -153,6 +197,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
 
   @override
   void dispose() {
+    _cameraGeneration++;
     WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
     super.dispose();
@@ -161,85 +206,125 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
   @override
   Widget build(BuildContext context) {
     final controller = _controller;
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
+    return PopScope(
+      canPop: !_capturing,
+      child: Scaffold(
         backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        title: const Text('拍照 · 录音继续中'),
-      ),
-      body: _error != null
-          ? Center(
-              child: Text(
-                '无法启动相机\n$_error',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white),
-              ),
-            )
-          : controller == null
-          ? const Center(child: CircularProgressIndicator())
-          : Stack(
-              fit: StackFit.expand,
-              children: [
-                LayoutBuilder(
-                  builder: (context, constraints) => GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTapDown: (details) => _focus(details, constraints),
-                    child: Center(child: CameraPreview(controller)),
-                  ),
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          foregroundColor: Colors.white,
+          title: const Text('现场拍照'),
+        ),
+        body: _error != null
+            ? Center(
+                child: Text(
+                  '无法启动相机\n$_error',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white),
                 ),
-                Positioned(
-                  left: 16,
-                  right: 16,
-                  top: 12,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      IconButton.filledTonal(
-                        onPressed: _toggleFlash,
-                        tooltip: _flashMode == FlashMode.off
-                            ? '开启自动闪光'
-                            : '关闭闪光灯',
-                        icon: Icon(
-                          _flashMode == FlashMode.off
-                              ? Icons.flash_off_rounded
-                              : Icons.flash_auto_rounded,
+              )
+            : controller == null
+            ? const Center(child: CircularProgressIndicator())
+            : Stack(
+                fit: StackFit.expand,
+                children: [
+                  LayoutBuilder(
+                    builder: (context, constraints) => GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTapDown: (details) => _focus(details, constraints),
+                      onScaleStart: (_) => _gestureZoom = _zoom,
+                      onScaleUpdate: (details) {
+                        if (details.pointerCount >= 2) {
+                          _setZoom(_gestureZoom * details.scale);
+                        }
+                      },
+                      child: Center(child: CameraPreview(controller)),
+                    ),
+                  ),
+                  Positioned(
+                    left: 24,
+                    right: 24,
+                    bottom: 145,
+                    child: Column(
+                      children: [
+                        Text(
+                          '已保存 $_savedCount 张 · ${_zoom.toStringAsFixed(1)}×',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            backgroundColor: Colors.black54,
+                          ),
                         ),
-                      ),
-                      if (_cameras.length > 1)
+                        if (_maxZoom > _minZoom)
+                          Slider(
+                            value: _zoom,
+                            min: _minZoom,
+                            max: _maxZoom,
+                            label: '${_zoom.toStringAsFixed(1)}×',
+                            onChanged: _capturing ? null : _setZoom,
+                          ),
+                        const Text(
+                          '点按对焦 · 双指缩放 · 可连续拍摄',
+                          style: TextStyle(
+                            color: Colors.white,
+                            backgroundColor: Colors.black54,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Positioned(
+                    left: 16,
+                    right: 16,
+                    top: 12,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
                         IconButton.filledTonal(
-                          onPressed: _switchCamera,
-                          tooltip: '切换前后摄像头',
-                          icon: const Icon(Icons.cameraswitch_rounded),
+                          onPressed: _toggleFlash,
+                          tooltip: _flashMode == FlashMode.off
+                              ? '开启自动闪光'
+                              : '关闭闪光灯',
+                          icon: Icon(
+                            _flashMode == FlashMode.off
+                                ? Icons.flash_off_rounded
+                                : Icons.flash_auto_rounded,
+                          ),
                         ),
-                    ],
+                        if (_cameras.length > 1)
+                          IconButton.filledTonal(
+                            onPressed: _switchCamera,
+                            tooltip: '切换前后摄像头',
+                            icon: const Icon(Icons.cameraswitch_rounded),
+                          ),
+                      ],
+                    ),
                   ),
-                ),
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 32,
-                  child: Center(
-                    child: Semantics(
-                      button: true,
-                      label: '拍照',
-                      child: IconButton.filled(
-                        onPressed: _capturing ? null : _capture,
-                        iconSize: 48,
-                        padding: const EdgeInsets.all(18),
-                        style: IconButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          foregroundColor: Colors.black,
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 32,
+                    child: Center(
+                      child: Semantics(
+                        button: true,
+                        label: '拍照',
+                        child: IconButton.filled(
+                          onPressed: _capturing ? null : _capture,
+                          iconSize: 48,
+                          padding: const EdgeInsets.all(18),
+                          style: IconButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            foregroundColor: Colors.black,
+                          ),
+                          icon: _capturing
+                              ? const CircularProgressIndicator()
+                              : const Icon(Icons.camera_alt),
                         ),
-                        icon: _capturing
-                            ? const CircularProgressIndicator()
-                            : const Icon(Icons.camera_alt),
                       ),
                     ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              ),
+      ),
     );
   }
 }

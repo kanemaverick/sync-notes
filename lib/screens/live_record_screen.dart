@@ -12,6 +12,7 @@ import '../models/entities.dart';
 import '../services/ai_processing_service.dart';
 import '../services/background_recording_service.dart';
 import '../services/gallery_photo_picker.dart';
+import '../services/document_scanner.dart';
 import '../services/media_storage.dart';
 import '../widgets/photo_source_sheet.dart';
 import '../widgets/recording_quick_actions.dart';
@@ -208,6 +209,7 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
       if (!mounted) return;
       setState(() => _busy = false);
       unawaited(_recoverLostGalleryPhoto());
+      unawaited(_recoverDocumentScans());
     } catch (error) {
       _session = _session.copyWith(status: SessionStatus.failed);
       await widget.repository.updateSession(_session);
@@ -266,9 +268,10 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
     String? photoSource,
     int? offsetOverride,
     DateTime? deviceTime,
+    String? eventId,
   }) async {
     final event = TimelineEvent(
-      id: _uuid.v4(),
+      id: eventId ?? _uuid.v4(),
       sessionId: _session.id,
       type: type,
       offsetMs: offsetOverride ?? await _clock.offsetMs(),
@@ -320,8 +323,72 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
     switch (source) {
       case PhotoSourceChoice.camera:
         await _takePhoto();
+      case PhotoSourceChoice.document:
+        await _scanDocument();
       case PhotoSourceChoice.gallery:
         await _importGalleryPhoto();
+    }
+  }
+
+  Future<void> _scanDocument() async {
+    final proceed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('PPT / 文档扫描'),
+        content: const Text(
+          '直接拍摄并裁边、矫正透视，无需手动导入。首次使用可能需要 Google Play 服务下载组件。\n\n扫描器只返回处理后的图片，不提供原始快门时间；节点按进入扫描的时间定位，备注保留操作时间范围，可在回顾页调整。需要精准同步或未处理原图时，请使用“相机拍照”。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('开始扫描'),
+          ),
+        ],
+      ),
+    );
+    if (proceed != true) return;
+    try {
+      final scan = await DocumentScanner().scan(
+        sessionId: _session.id,
+        offsetMs: await _clock.offsetMs(),
+        deviceTime: DateTime.now(),
+      );
+      if (scan != null) await _saveDocumentScan(scan);
+    } catch (error) {
+      _showPhotoError('扫描不可用，请改用相机拍照', error);
+    }
+  }
+
+  Future<void> _saveDocumentScan(DocumentScan scan) async {
+    final eventId = 'scan-${scan.id}';
+    final events = await widget.repository.listTimelineEvents(_session.id);
+    if (!events.any((e) => e.id == eventId)) {
+      await _persistPhoto(
+        sourcePath: scan.path,
+        offsetMs: scan.offsetMs,
+        source: 'documentScan',
+        deviceTime: scan.startedAt,
+        eventId: eventId,
+        note:
+            '文档扫描处理图；时间点为扫描入口时间，非精确快门时间。操作范围：${formatDeviceTimestamp(scan.startedAt)} 至 ${formatDeviceTimestamp(scan.completedAt)}。可在回顾页调整时间点。',
+      );
+    }
+    await DocumentScanner().acknowledge(scan.id);
+  }
+
+  Future<void> _recoverDocumentScans() async {
+    try {
+      for (final scan in await DocumentScanner().pending(_session.id)) {
+        await _saveDocumentScan(scan);
+      }
+    } on MissingPluginException {
+      // Document scanning is Android-only; ordinary camera/gallery remain.
+    } catch (error) {
+      _showPhotoError('扫描图片仍保存在本机，下次进入会重试导入', error);
     }
   }
 
@@ -348,22 +415,19 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
       return;
     }
     if (!mounted) return;
-    final result = await Navigator.of(context).push<CameraCaptureResult>(
+    await Navigator.of(context).push<void>(
       MaterialPageRoute(
-        builder: (_) => CameraCaptureScreen(offsetProvider: _clock.offsetMs),
+        builder: (_) => CameraCaptureScreen(
+          offsetProvider: _clock.offsetMs,
+          onCapture: (result) => _persistPhoto(
+            sourcePath: result.temporaryPath,
+            offsetMs: result.offsetMs,
+            source: 'camera',
+            deviceTime: result.capturedAt,
+          ),
+        ),
       ),
     );
-    if (result == null) return;
-    try {
-      await _persistPhoto(
-        sourcePath: result.temporaryPath,
-        offsetMs: result.offsetMs,
-        source: 'camera',
-        deviceTime: result.capturedAt,
-      );
-    } catch (error) {
-      _showPhotoError('照片保存失败', error);
-    }
   }
 
   Future<void> _importGalleryPhoto() async {
@@ -422,18 +486,18 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
     required int offsetMs,
     required String source,
     required DateTime deviceTime,
+    String? note,
+    String? eventId,
   }) async {
     final stored = await widget.storage.storePhoto(
       sessionId: _session.id,
       sourcePath: sourcePath,
     );
-    final note = mounted
-        ? await _optionalTextDialog(title: '添加照片备注', hint: '一句话即可，也可以跳过')
-        : null;
     await _addEvent(
       TimelineEventType.photo,
       title: '照片 ${_photoCount + 1}',
       note: note,
+      eventId: eventId,
       photoPath: stored.path,
       thumbnailPath: stored.thumbnailPath,
       photoSource: source,

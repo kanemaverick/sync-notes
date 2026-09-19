@@ -87,7 +87,11 @@ class TimelineEventTile extends StatelessWidget {
                         event.photoSource != null) ...[
                       const SizedBox(height: 3),
                       Text(
-                        event.photoSource == 'gallery' ? '来自相册' : '相机拍摄',
+                        switch (event.photoSource) {
+                          'gallery' => '来自相册',
+                          'documentScan' => '文档扫描 · 时间待校准',
+                          _ => '相机拍摄',
+                        },
                         style: Theme.of(context).textTheme.labelSmall?.copyWith(
                           color: Theme.of(context).colorScheme.outline,
                         ),

@@ -27,6 +27,7 @@ void main() {
     await tester.tap(find.text('照片'));
     await tester.pumpAndSettle();
     expect(find.text('相机拍照'), findsOneWidget);
+    expect(find.text('PPT / 文档扫描'), findsOneWidget);
     expect(find.text('从相册导入'), findsOneWidget);
 
     await tester.tap(find.text('从相册导入'));

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:archive/archive_io.dart';
 import 'package:image/image.dart' as image_lib;
@@ -54,12 +55,7 @@ class MediaStorage {
     final thumbnailPath = p.join(thumbnails.path, 'photo_$stamp.jpg');
     await File(originalPath).writeAsBytes(sourceBytes, flush: true);
 
-    final decoded = image_lib.decodeImage(sourceBytes);
-    if (decoded == null) throw const FormatException('无法读取照片');
-    final thumbnail = image_lib.copyResize(decoded, width: 480);
-    await File(
-      thumbnailPath,
-    ).writeAsBytes(image_lib.encodeJpg(thumbnail, quality: 78), flush: true);
+    await Isolate.run(() => createPhotoThumbnail(originalPath, thumbnailPath));
     return StoredPhoto(path: originalPath, thumbnailPath: thumbnailPath);
   }
 
@@ -288,6 +284,21 @@ class MediaStorage {
     }
     return zipFile;
   }
+}
+
+/// Full-resolution decoding must not freeze the live controls or camera UI.
+Future<void> createPhotoThumbnail(
+  String originalPath,
+  String thumbnailPath,
+) async {
+  final bytes = await File(originalPath).readAsBytes();
+  final decoded = image_lib.decodeImage(bytes);
+  if (decoded == null) throw const FormatException('无法读取照片');
+  final oriented = image_lib.bakeOrientation(decoded);
+  final thumbnail = image_lib.copyResize(oriented, width: 480);
+  await File(
+    thumbnailPath,
+  ).writeAsBytes(image_lib.encodeJpg(thumbnail, quality: 78), flush: true);
 }
 
 /// Returns an extension that matches the encoded photo bytes.

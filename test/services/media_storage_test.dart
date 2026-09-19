@@ -3,10 +3,27 @@ import 'dart:io';
 
 import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:sync_notes/models/entities.dart';
 import 'package:sync_notes/services/media_storage.dart';
 
 void main() {
+  test('照片原件字节不变，独立线程生成缩略图', () async {
+    final root = await Directory.systemTemp.createTemp('sync_notes_photo_');
+    addTearDown(() => root.delete(recursive: true));
+    final bytes = img.encodeJpg(img.Image(width: 800, height: 400));
+    final source = File('${root.path}/source.jpg');
+    await source.writeAsBytes(bytes);
+    final stored = await MediaStorage(
+      rootDirectory: root,
+    ).storePhoto(sessionId: 's', sourcePath: source.path);
+    expect(await File(stored.path).readAsBytes(), bytes);
+    final thumbnail = img.decodeJpg(
+      await File(stored.thumbnailPath).readAsBytes(),
+    )!;
+    expect(thumbnail.width, 480);
+    expect(thumbnail.height, 240);
+  });
   group('detectPhotoFileExtension', () {
     test('uses encoded PNG signature instead of a misleading path suffix', () {
       expect(

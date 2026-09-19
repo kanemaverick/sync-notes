@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-enum PhotoSourceChoice { camera, gallery }
+enum PhotoSourceChoice { camera, document, gallery }
 
 class PhotoSourceSheet extends StatelessWidget {
   const PhotoSourceSheet({super.key});
@@ -22,6 +22,13 @@ class PhotoSourceSheet extends StatelessWidget {
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                 ),
               ),
+            ),
+            ListTile(
+              minTileHeight: 72,
+              leading: const Icon(Icons.document_scanner_outlined, size: 32),
+              title: const Text('PPT / 文档扫描'),
+              subtitle: const Text('裁边、透视矫正；首次使用可能需要联网'),
+              onTap: () => Navigator.pop(context, PhotoSourceChoice.document),
             ),
             ListTile(
               minTileHeight: 72,
