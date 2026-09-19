@@ -612,8 +612,9 @@ class RecordingTaskHandler extends TaskHandler {
           item['speakerLabel'] != '本地初稿' &&
           (item['startMs']! as int) < endMs &&
           (item['endMs']! as int) > startMs,
-    ))
+    )) {
       return;
+    }
     if (text.isNotEmpty) {
       final item = <String, Object?>{
         'id': '$_sessionId-transcript-$_transcriptSequence',
