@@ -13,10 +13,12 @@ from urllib.parse import quote, urlencode, urlsplit
 from websockets.client import connect
 from websockets.exceptions import ConnectionClosed
 from websockets.server import serve
+from aliyun_asr import relay as relay_aliyun
 
 
 TENCENT_ASR_HOST = "asr.cloud.tencent.com"
 CLIENT_PATH = "/v1/asr/tencent/realtime"
+ALIYUN_PATH = "/v1/asr/aliyun/realtime"
 
 
 def _environment():
@@ -82,7 +84,7 @@ async def _process_request(path, _request_headers):
             ],
             body,
         )
-    if urlsplit(path).path != CLIENT_PATH:
+    if urlsplit(path).path not in (CLIENT_PATH, ALIYUN_PATH):
         body = b"Not found"
         return (
             HTTPStatus.NOT_FOUND,
@@ -99,6 +101,9 @@ async def _relay(source, destination):
 
 async def _handle_client(client, path):
     config = _environment()
+    if urlsplit(path).path == ALIYUN_PATH:
+        await _handle_aliyun(client, config["proxy_token"])
+        return
     if not _is_configured(config):
         await client.send(
             json.dumps({"type": "proxy.error", "message": "Provider not configured"})
@@ -140,12 +145,46 @@ async def _handle_client(client, path):
                 await upstream.send(json.dumps({"type": "end"}))
     except ConnectionClosed:
         return
-    except Exception as error:
+    except Exception:
         if not client.closed:
             await client.send(
-                json.dumps({"type": "proxy.error", "message": str(error)})
+                json.dumps({"type": "proxy.error", "message": "云识别连接失败，请检查服务端配置"})
             )
             await client.close(code=1011)
+
+
+async def _handle_aliyun(client, token):
+    if not token or not hmac.compare_digest(
+        client.request_headers.get("Authorization", ""), f"Bearer {token}"
+    ):
+        await client.close(code=1008, reason="Unauthorized")
+        return
+    key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
+    if not key:
+        await client.send(json.dumps({"type": "proxy.error", "message": "阿里云尚未配置密钥"}))
+        await client.close(code=1011)
+        return
+    # Explicit server configuration only. Clients cannot select arbitrary hosts/models.
+    workspace = os.environ.get("ALIYUN_WORKSPACE_ID", "").strip()
+    if workspace and not re.fullmatch(r"[a-zA-Z0-9-]+", workspace):
+        await client.close(code=1011, reason="Invalid workspace configuration")
+        return
+    host = f"{workspace}.cn-beijing.maas.aliyuncs.com" if workspace else "dashscope.aliyuncs.com"
+    try:
+        async with connect(
+            f"wss://{host}/api-ws/v1/inference",
+            extra_headers={"Authorization": f"Bearer {key}"},
+            open_timeout=8, max_size=1024 * 1024, max_queue=64,
+        ) as upstream:
+            await relay_aliyun(client, upstream,
+                              vocabulary_id=os.environ.get("ALIYUN_VOCABULARY_ID", "").strip())
+    except ConnectionClosed:
+        return
+    except Exception:
+        if not client.closed:
+            await client.send(json.dumps({"type": "proxy.error", "message": "阿里云连接失败，请检查密钥、额度或网络"}))
+    finally:
+        await client.close()
 
 
 async def main():
