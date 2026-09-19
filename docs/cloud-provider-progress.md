@@ -33,3 +33,12 @@ App 已新增腾讯/阿里/自定义代理选择器，选择会切换服务器�
 - 73 项 Flutter 测试通过，静态检查通过。包含本地 WebSocket 超时回归。
 - 豆包官方详细协议页本次读取失败，尚未实现；不能把其他产品的协议套用过来。
 - 当前阶段仍需真实云账号配置与真机回归，以上测试不等于识别准确率验收。
+
+## 部署包验证
+
+新增 allowlist 打包脚本 `tool/package_asr_proxy.py`，成功生成
+`build/tencent_asr_proxy_scf.zip`，使用 websockets 12.0 的 py3-none-any wheel。
+通过 ZIP 直接导入 app、aliyun_asr、websockets 的冒烟检查。
+10 项 Python 测试通过，其中 4 项实际启动本地 TCP/WebSocket 检查鉴权与路由。
+尚未上传云端：当前环境未发现部署 CLI，浏览器控制两次超时。
+手机已确认覆盖安装 1.2.1+4010，但锁屏仍阻止 UI 验收。

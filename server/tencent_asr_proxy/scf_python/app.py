@@ -73,7 +73,12 @@ def _tencent_asr_url(config, session_id):
 async def _process_request(path, _request_headers):
     if urlsplit(path).path == "/health":
         body = json.dumps(
-            {"ok": True, "providerConfigured": _is_configured(_environment())},
+            {"ok": True, "providerConfigured": _is_configured(_environment()),
+             "providers": {
+                 "tencent": _is_configured(_environment()),
+                 "aliyun": bool(os.environ.get("DASHSCOPE_API_KEY", "").strip()
+                                and _environment()["proxy_token"]),
+             }},
             separators=(",", ":"),
         ).encode("utf-8")
         return (
@@ -101,6 +106,11 @@ async def _relay(source, destination):
 
 async def _handle_client(client, path):
     config = _environment()
+    expected = f"Bearer {config['proxy_token']}"
+    received = client.request_headers.get("Authorization", "")
+    if not config['proxy_token'] or not hmac.compare_digest(received, expected):
+        await client.close(code=1008, reason="Unauthorized")
+        return
     if urlsplit(path).path == ALIYUN_PATH:
         await _handle_aliyun(client, config["proxy_token"])
         return
@@ -109,12 +119,6 @@ async def _handle_client(client, path):
             json.dumps({"type": "proxy.error", "message": "Provider not configured"})
         )
         await client.close(code=1011)
-        return
-
-    expected = f"Bearer {config['proxy_token']}"
-    received = client.request_headers.get("Authorization", "")
-    if not hmac.compare_digest(received, expected):
-        await client.close(code=1008, reason="Unauthorized")
         return
 
     session_id = urlsplit(path).query
