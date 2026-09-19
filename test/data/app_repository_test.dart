@@ -21,6 +21,59 @@ Session buildSession({SessionStatus status = SessionStatus.recording}) =>
 void main() {
   setUpAll(sqfliteFfiInit);
 
+  test('恢复音频元数据替换是原子操作，不修改已有节点', () async {
+    final database = await AppDatabase.open(
+      factory: databaseFactoryFfi,
+      path: inMemoryDatabasePath,
+    );
+    addTearDown(database.close);
+    final repository = AppRepository(database);
+    await repository.insertSession(buildSession());
+    await repository.insertTimelineEvent(
+      TimelineEvent(
+        id: 'keep',
+        sessionId: 'session-1',
+        type: TimelineEventType.highlight,
+        offsetMs: 1000,
+        createdAt: DateTime(2026),
+      ),
+    );
+    const old = AudioSegment(
+      id: 'old',
+      sessionId: 'session-1',
+      filePath: '/original.wav',
+      timelineStartMs: 0,
+      durationMs: 1000,
+      sequence: 0,
+    );
+    const recovered = AudioSegment(
+      id: 'recovered',
+      sessionId: 'session-1',
+      filePath: '/original.wav',
+      timelineStartMs: 0,
+      durationMs: 2000,
+      sequence: 4,
+    );
+    await repository.upsertAudioSegment(old);
+    await repository.replaceRecoveredAudioSegments('session-1', [recovered]);
+    expect(
+      (await repository.listAudioSegments('session-1')).single.id,
+      'recovered',
+    );
+    expect(
+      (await repository.listTimelineEvents('session-1')).single.id,
+      'keep',
+    );
+    await expectLater(
+      repository.replaceRecoveredAudioSegments('session-1', [old, old]),
+      throwsA(isA<DatabaseException>()),
+    );
+    expect(
+      (await repository.listAudioSegments('session-1')).single.id,
+      'recovered',
+    );
+  });
+
   test('Session和TimelineEvent可写入并读回，时间轴按offset排序', () async {
     final database = await AppDatabase.open(
       factory: databaseFactoryFfi,

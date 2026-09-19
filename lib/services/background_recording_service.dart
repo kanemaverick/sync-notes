@@ -16,6 +16,7 @@ import 'live_transcription_service.dart';
 import 'local_asr_worker.dart';
 import 'local_transcription_settings.dart';
 import 'media_storage.dart';
+import 'recording_file_recovery.dart';
 
 const _sessionIdKey = 'recording.sessionId';
 const _sessionDirKey = 'recording.sessionDir';
@@ -246,8 +247,8 @@ class BackgroundRecordingService {
       if (running && currentServiceSession == session.id) {
         continue;
       }
-      await syncManifest(session.id);
       await _recoverOrphanSegments(session.id);
+      await syncManifest(session.id);
       final segments = await repository.listAudioSegments(session.id);
       final duration = segments.fold(
         0,
@@ -273,50 +274,31 @@ class BackgroundRecordingService {
   }
 
   Future<void> _recoverOrphanSegments(String sessionId) async {
-    final audioDir = await storage.audioDirectory(sessionId);
-    final files = await audioDir
-        .list()
-        .where(
-          (entity) =>
-              entity is File &&
-              {'.m4a', '.wav'}.contains(p.extension(entity.path)),
-        )
-        .cast<File>()
-        .toList();
-    files.sort((a, b) => a.path.compareTo(b.path));
-    final known = {
-      for (final segment in await repository.listAudioSegments(sessionId))
-        segment.filePath: segment,
-    };
-    var timelineStartMs = 0;
-    for (var sequence = 0; sequence < files.length; sequence++) {
-      final file = files[sequence];
-      var durationMs = known[file.path]?.durationMs;
-      if (durationMs == null) {
+    final data = await reconcileRecordingFiles(
+      directory: await storage.sessionDirectory(sessionId),
+      sessionId: sessionId,
+      legacyDuration: (file) async {
         final player = AudioPlayer();
         try {
-          durationMs =
-              (await player.setFilePath(file.path))?.inMilliseconds ?? 0;
+          return (await player.setFilePath(file.path))?.inMilliseconds ?? 0;
         } catch (_) {
-          durationMs = 0;
+          return 0;
         } finally {
           await player.dispose();
         }
-      }
-      if (durationMs > 0) {
-        await repository.upsertAudioSegment(
-          AudioSegment(
-            id: '$sessionId-segment-$sequence',
-            sessionId: sessionId,
-            filePath: file.path,
-            timelineStartMs: timelineStartMs,
-            durationMs: durationMs,
-            sequence: sequence,
-          ),
-        );
-        timelineStartMs += durationMs;
-      }
-    }
+      },
+    );
+    await repository.replaceRecoveredAudioSegments(sessionId, [
+      for (final map in data['segments'] as List)
+        AudioSegment(
+          id: map['id'] as String,
+          sessionId: sessionId,
+          filePath: map['filePath'] as String,
+          timelineStartMs: map['timelineStartMs'] as int,
+          durationMs: map['durationMs'] as int,
+          sequence: map['sequence'] as int,
+        ),
+    ]);
   }
 }
 
@@ -435,33 +417,29 @@ class RecordingTaskHandler extends TaskHandler {
   }
 
   Future<void> _restoreExistingManifest() async {
-    final manifest = File(p.join(_sessionDir, 'recording_manifest.json'));
-    if (!await manifest.exists()) return;
-    try {
-      final data =
-          jsonDecode(await manifest.readAsString()) as Map<String, dynamic>;
-      final segments = (data['segments'] as List<dynamic>? ?? const [])
-          .cast<Map<String, dynamic>>();
-      for (final segment in segments) {
-        _segments.add(Map<String, Object?>.from(segment));
-      }
-      for (final event in (data['events'] as List<dynamic>? ?? const [])) {
-        _events.add(Map<String, Object?>.from(event as Map));
-      }
-      for (final transcript
-          in (data['transcripts'] as List<dynamic>? ?? const [])) {
-        _transcripts.add(Map<String, Object?>.from(transcript as Map));
-      }
-      final durationMs = segments.fold<int>(
-        0,
-        (sum, segment) => sum + ((segment['durationMs'] as num?)?.round() ?? 0),
-      );
-      _timelineSamples = durationMs * asrSampleRate ~/ 1000;
-      _sequence = segments.length;
-      _transcriptSequence = _transcripts.length;
-    } catch (_) {
-      // A malformed manifest must not prevent a new recoverable segment.
+    final data = await reconcileRecordingFiles(
+      directory: Directory(_sessionDir),
+      sessionId: _sessionId,
+    );
+    final segments = (data['segments'] as List<dynamic>? ?? const [])
+        .cast<Map<String, dynamic>>();
+    for (final segment in segments) {
+      _segments.add(Map<String, Object?>.from(segment));
     }
+    for (final event in (data['events'] as List<dynamic>? ?? const [])) {
+      _events.add(Map<String, Object?>.from(event as Map));
+    }
+    for (final transcript
+        in (data['transcripts'] as List<dynamic>? ?? const [])) {
+      _transcripts.add(Map<String, Object?>.from(transcript as Map));
+    }
+    final durationMs = segments.fold<int>(
+      0,
+      (sum, segment) => sum + ((segment['durationMs'] as num?)?.round() ?? 0),
+    );
+    _timelineSamples = durationMs * asrSampleRate ~/ 1000;
+    _sequence = data['nextSequence'] as int;
+    _transcriptSequence = _transcripts.length;
   }
 
   Future<void> _loadCloudConfiguration() async {
@@ -564,11 +542,12 @@ class RecordingTaskHandler extends TaskHandler {
   Future<void> _startSegment() async {
     _segmentStartSamples = _timelineSamples;
     _segmentSamples = 0;
-    _currentAudioPath = p.join(
-      _sessionDir,
-      'audio',
-      'segment_${_sequence.toString().padLeft(4, '0')}.wav',
+    final reserved = await reserveAudioFile(
+      Directory(p.join(_sessionDir, 'audio')),
+      _sequence,
     );
+    _sequence = reserved.sequence;
+    _currentAudioPath = reserved.file.path;
     _audioFile = await File(_currentAudioPath).open(mode: FileMode.write);
     _audioFile!.writeFromSync(createWavHeader(dataLength: 0));
     _segmentOpen = true;

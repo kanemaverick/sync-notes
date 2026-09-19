@@ -97,6 +97,20 @@ class AppRepository implements SessionWriter {
     return rows.map(AudioSegment.fromMap).toList();
   }
 
+  Future<void> replaceRecoveredAudioSegments(
+    String sessionId,
+    List<AudioSegment> segments,
+  ) => _db.transaction((txn) async {
+    await txn.delete(
+      'audio_segments',
+      where: 'session_id = ?',
+      whereArgs: [sessionId],
+    );
+    for (final segment in segments) {
+      await txn.insert('audio_segments', segment.toMap());
+    }
+  });
+
   Future<void> insertTimelineEvent(TimelineEvent event) => _db.insert(
     'timeline_events',
     event.toMap(),
