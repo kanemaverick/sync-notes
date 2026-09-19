@@ -54,6 +54,34 @@ CloudProxyEvent? parseCloudProxyMessage(
   if (decoded is! Map) return null;
   final map = Map<String, dynamic>.from(decoded);
   if (map['type'] == 'proxy.ready') return const CloudProxyReady();
+  if (map['type'] == 'proxy.finished') return const CloudProxyFinished();
+  // Provider adapters normalize timestamps relative to this connection's PCM.
+  // Keep the legacy Tencent envelope below for already deployed proxies.
+  if (map['type'] == 'transcript') {
+    final text = map['text'];
+    final id = _asInt(map['sentenceId']);
+    final start = _asInt(map['startMs']);
+    final end = _asInt(map['endMs']);
+    if (text is! String ||
+        id == null ||
+        id < 0 ||
+        start == null ||
+        start < 0 ||
+        end == null ||
+        end < start ||
+        map['isFinal'] is! bool) {
+      return const CloudProxyFailure('云端转写片段格式或时间戳无效');
+    }
+    if (text.trim().isEmpty) return null;
+    return CloudTranscriptUpdate(
+      sentenceId: id,
+      text: text.trim(),
+      startMs: baseOffsetMs + start,
+      endMs: baseOffsetMs + end,
+      isFinal: map['isFinal'] as bool,
+      speakerId: _asInt(map['speakerId']),
+    );
+  }
   if (map['type'] == 'proxy.error') {
     return CloudProxyFailure(map['message'] as String? ?? '云端代理连接失败');
   }
