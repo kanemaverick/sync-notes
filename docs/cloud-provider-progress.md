@@ -42,3 +42,19 @@ App 已新增腾讯/阿里/自定义代理选择器，选择会切换服务器�
 10 项 Python 测试通过，其中 4 项实际启动本地 TCP/WebSocket 检查鉴权与路由。
 尚未上传云端：当前环境未发现部署 CLI，浏览器控制两次超时。
 手机已确认覆盖安装 1.2.1+4010，但锁屏仍阻止 UI 验收。
+
+## 豆包适配进展（未真实云端验收）
+
+通过火山引擎官方 GitHub 示例确认 SAUC 报文结构后新增
+`doubao_asr.py`、`/v1/asr/doubao/realtime` 和 App 选择项。
+服务端需 `DOUBAO_APP_ID`、`DOUBAO_ACCESS_TOKEN`，可选 `DOUBAO_VOCABULARY_ID`。
+使用双向流式 bigmodel 路径及 `volc.bigasr.sauc.duration` 资源。
+当前实现旧版应用ID/访问令牌鉴权；新版单 API Key 控制台尚未适配验证。
+15 项 Python 测试通过，包括握手前不发音频、末包标记、最后稳定句、去重、
+压缩响应上限和三条路由鉴权。未上传真实录音、未开通付费资源、未部署线上。
+App 选择项尚未包含在手机的 4010 安装包内，需下一次构建安装。
+
+官方参考：
+- https://github.com/volcengine/ai-app-lab/blob/main/arkitect/core/component/asr/asr_client.py
+- https://github.com/volcengine/ai-app-lab/blob/main/arkitect/utils/binary_protocol.py
+- https://github.com/volcengine/ai-app-lab/blob/main/arkitect/core/component/asr/model.py

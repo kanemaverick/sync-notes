@@ -7,6 +7,7 @@ import os
 import random
 import re
 import time
+import uuid
 from http import HTTPStatus
 from urllib.parse import quote, urlencode, urlsplit
 
@@ -14,11 +15,13 @@ from websockets.client import connect
 from websockets.exceptions import ConnectionClosed
 from websockets.server import serve
 from aliyun_asr import relay as relay_aliyun
+from doubao_asr import relay as relay_doubao
 
 
 TENCENT_ASR_HOST = "asr.cloud.tencent.com"
 CLIENT_PATH = "/v1/asr/tencent/realtime"
 ALIYUN_PATH = "/v1/asr/aliyun/realtime"
+DOUBAO_PATH = "/v1/asr/doubao/realtime"
 
 
 def _environment():
@@ -78,6 +81,9 @@ async def _process_request(path, _request_headers):
                  "tencent": _is_configured(_environment()),
                  "aliyun": bool(os.environ.get("DASHSCOPE_API_KEY", "").strip()
                                 and _environment()["proxy_token"]),
+                 "doubao": bool(os.environ.get("DOUBAO_APP_ID", "").strip()
+                                and os.environ.get("DOUBAO_ACCESS_TOKEN", "").strip()
+                                and _environment()["proxy_token"]),
              }},
             separators=(",", ":"),
         ).encode("utf-8")
@@ -89,7 +95,7 @@ async def _process_request(path, _request_headers):
             ],
             body,
         )
-    if urlsplit(path).path not in (CLIENT_PATH, ALIYUN_PATH):
+    if urlsplit(path).path not in (CLIENT_PATH, ALIYUN_PATH, DOUBAO_PATH):
         body = b"Not found"
         return (
             HTTPStatus.NOT_FOUND,
@@ -113,6 +119,9 @@ async def _handle_client(client, path):
         return
     if urlsplit(path).path == ALIYUN_PATH:
         await _handle_aliyun(client, config["proxy_token"])
+        return
+    if urlsplit(path).path == DOUBAO_PATH:
+        await _handle_doubao(client)
         return
     if not _is_configured(config):
         await client.send(
@@ -202,6 +211,32 @@ async def main():
         max_size=None,
     ):
         await asyncio.Future()
+
+
+async def _handle_doubao(client):
+    app_id = os.environ.get("DOUBAO_APP_ID", "").strip()
+    access_token = os.environ.get("DOUBAO_ACCESS_TOKEN", "").strip()
+    if not app_id or not access_token:
+        await client.send(json.dumps({"type": "proxy.error", "message": "豆包尚未配置应用和访问令牌"}))
+        await client.close(code=1011)
+        return
+    try:
+        async with connect(
+            "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel",
+            extra_headers={"X-Api-App-Key": app_id, "X-Api-Access-Key": access_token,
+                           "X-Api-Resource-Id": "volc.bigasr.sauc.duration",
+                           "X-Api-Request-Id": str(uuid.uuid4())},
+            open_timeout=8, max_size=1024 * 1024, max_queue=64,
+        ) as upstream:
+            await relay_doubao(client, upstream,
+                               os.environ.get("DOUBAO_VOCABULARY_ID", "").strip())
+    except ConnectionClosed:
+        return
+    except Exception:
+        if not client.closed:
+            await client.send(json.dumps({"type": "proxy.error", "message": "豆包连接失败，请检查服务权限、额度或网络"}))
+    finally:
+        await client.close()
 
 
 if __name__ == "__main__":

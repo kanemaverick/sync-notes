@@ -64,3 +64,12 @@ Python 代码包使用纯 Python WebSocket 中继，避免 SCF Python 3.9 基础
 `python3 -m unittest -v test_aliyun_asr test_proxy_routes`。
 测试使用本地模拟服务，不上传录音，不产生云 ASR 费用。
 当前 Dart 代理仍仅支持腾讯；多服务商部署请使用 Python ZIP。
+
+## 豆包语音（Python 代理新增，真实云端待验证）
+
+路由 `/v1/asr/doubao/realtime`，使用旧版控制台应用 ID 与访问令牌：
+`DOUBAO_APP_ID`、`DOUBAO_ACCESS_TOKEN`，可选 `DOUBAO_VOCABULARY_ID`。
+开通资源应匹配 `volc.bigasr.sauc.duration`。本实现尚未验证新版单 API Key 鉴权。
+配置存在状态见 `/health` 的 `providers.doubao`，不代表真实连接成功。
+打包脚本已包含 `doubao_asr.py`；全部服务端测试命令：
+`python3 -m unittest -v test_aliyun_asr test_doubao_asr test_proxy_routes`。

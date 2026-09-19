@@ -33,7 +33,7 @@ class RoutesTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("尚未配置", result["message"])
 
     async def test_both_routes_require_auth_even_when_unconfigured(self):
-        for path in (app.CLIENT_PATH, app.ALIYUN_PATH):
+        for path in (app.CLIENT_PATH, app.ALIYUN_PATH, app.DOUBAO_PATH):
             async with connect(f"ws://127.0.0.1:{self.port}{path}") as ws:
                 with self.assertRaises(ConnectionClosedError) as caught:
                     await ws.recv()
@@ -53,7 +53,7 @@ class RoutesTest(unittest.IsolatedAsyncioTestCase):
         writer.close()
         await writer.wait_closed()
         body = json.loads(response.split(b"\r\n\r\n", 1)[1])
-        self.assertEqual(body["providers"], {"tencent": False, "aliyun": False})
+        self.assertEqual(body["providers"], {"tencent": False, "aliyun": False, "doubao": False})
         self.assertNotIn(b"test-only", response)
 
 

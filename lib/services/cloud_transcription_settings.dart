@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 enum CloudAsrProvider {
   tencent('腾讯云', '/v1/asr/tencent/realtime'),
   aliyun('阿里 Fun-ASR', '/v1/asr/aliyun/realtime'),
+  doubao('豆包语音', '/v1/asr/doubao/realtime'),
   custom('自定义兼容代理', '');
 
   const CloudAsrProvider(this.label, this.path);

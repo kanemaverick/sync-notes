@@ -19,7 +19,7 @@ def main():
             "-r", str(source / "requirements.txt"),
         ], check=True)
         with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
-            for name in ("app.py", "aliyun_asr.py", "scf_bootstrap"):
+            for name in ("app.py", "aliyun_asr.py", "doubao_asr.py", "scf_bootstrap"):
                 info = zipfile.ZipInfo(name)
                 info.external_attr = (0o100755 if name == "scf_bootstrap" else 0o100644) << 16
                 archive.writestr(info, (source / name).read_bytes())

@@ -241,7 +241,7 @@ class _TranscriptionSettingsScreenState
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 8),
                     child: Text(
-                      '选择只修改代理路由，不会自动开通服务。阿里接口仍待真实云端验证。上方术语目前仅用于本机识别，云端热词需在服务器配置。',
+                      '选择只修改代理路由，不会自动开通服务。阿里、豆包接口仍待真实云端验证。上方术语目前仅用于本机识别，云端热词需在服务器配置。',
                     ),
                   ),
                   if (widget.store.hasBundledConfig) ...[
