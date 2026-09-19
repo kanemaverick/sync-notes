@@ -162,6 +162,7 @@ class CloudRealtimeTranscriber {
   WebSocket? _socket;
   StreamSubscription<dynamic>? _subscription;
   bool _closed = false;
+  int? _audioBaseOffsetMs;
 
   Future<void> connect() async {
     final source = Uri.parse(proxyUrl);
@@ -186,7 +187,7 @@ class CloudRealtimeTranscriber {
       (message) {
         final event = parseCloudProxyMessage(
           message,
-          baseOffsetMs: baseOffsetMs,
+          baseOffsetMs: _audioBaseOffsetMs ?? baseOffsetMs,
         );
         if (event != null) {
           if (event is CloudProxyFinished || event is CloudProxyFailure) {
@@ -207,11 +208,15 @@ class CloudRealtimeTranscriber {
     );
   }
 
-  void addPcm(Uint8List bytes) {
+  void addPcm(Uint8List bytes, {int? startMs}) {
     final socket = _socket;
     if (_closed || socket == null || socket.readyState != WebSocket.open) {
       return;
     }
+    if (bytes.isEmpty) return;
+    // A provider may take seconds to become ready. Its zero is the first
+    // submitted sample, not the earlier WebSocket connection attempt.
+    _audioBaseOffsetMs ??= startMs ?? baseOffsetMs;
     for (final frame in _frames.add(bytes)) {
       socket.add(frame);
     }

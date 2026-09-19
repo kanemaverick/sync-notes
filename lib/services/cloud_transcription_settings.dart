@@ -1,5 +1,32 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
+enum CloudAsrProvider {
+  tencent('腾讯云', '/v1/asr/tencent/realtime'),
+  aliyun('阿里 Fun-ASR', '/v1/asr/aliyun/realtime'),
+  custom('自定义兼容代理', '');
+
+  const CloudAsrProvider(this.label, this.path);
+  final String label;
+  final String path;
+
+  static CloudAsrProvider fromUrl(String url) {
+    final path = Uri.tryParse(url.trim())?.path;
+    return values.firstWhere(
+      (provider) => provider != custom && provider.path == path,
+      orElse: () => custom,
+    );
+  }
+}
+
+/// Switching provider keeps the operator's server and routing query intact.
+/// A custom path is never guessed; its owner must enter the correct endpoint.
+String cloudProviderUrl(String current, CloudAsrProvider provider) {
+  if (provider == CloudAsrProvider.custom) return current;
+  final uri = Uri.tryParse(current.trim());
+  if (uri == null || uri.host.isEmpty) return '';
+  return uri.replace(path: provider.path).toString();
+}
+
 const bundledCloudTranscriptionConfig = CloudTranscriptionConfig(
   enabled: bool.fromEnvironment('CLOUD_ASR_ENABLED'),
   proxyUrl: String.fromEnvironment('CLOUD_ASR_PROXY_URL'),

@@ -28,6 +28,7 @@ class _TranscriptionSettingsScreenState
   bool _saving = false;
   bool _obscureToken = true;
   bool _testing = false;
+  CloudAsrProvider _provider = CloudAsrProvider.custom;
 
   Future<void> _checkModel() async {
     if (await FlutterForegroundTask.isRunningService) {
@@ -91,6 +92,7 @@ class _TranscriptionSettingsScreenState
       _localModel = local.model;
       _hotwordsController.text = local.hotwords.join('\n');
       _urlController.text = config.proxyUrl;
+      _provider = CloudAsrProvider.fromUrl(config.proxyUrl);
       _tokenController.text = config.accessToken;
       _loading = false;
     });
@@ -132,6 +134,7 @@ class _TranscriptionSettingsScreenState
     setState(() {
       _enabled = config.enabled;
       _urlController.text = config.proxyUrl;
+      _provider = CloudAsrProvider.fromUrl(config.proxyUrl);
       _tokenController.text = config.accessToken;
     });
   }
@@ -202,12 +205,44 @@ class _TranscriptionSettingsScreenState
                   const Divider(height: 40),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: const Text('启用腾讯云实时转写'),
+                    title: const Text('启用云端实时转写'),
                     subtitle: const Text(
-                      '启用后，录音 PCM 会经你的代理发送给腾讯云；失败时自动保留本地字幕和录音',
+                      '启用后，录音会经你的代理上传至所选服务商；断网不影响本地录音。新服务需先在服务器配置密钥。',
                     ),
                     value: _enabled,
                     onChanged: (value) => setState(() => _enabled = value),
+                  ),
+                  DropdownButtonFormField<CloudAsrProvider>(
+                    key: ValueKey(_provider),
+                    initialValue: _provider,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: '云端识别服务'),
+                    items: CloudAsrProvider.values
+                        .map(
+                          (provider) => DropdownMenuItem(
+                            value: provider,
+                            child: Text(provider.label),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: _enabled
+                        ? (provider) {
+                            if (provider == null) return;
+                            setState(() {
+                              _urlController.text = cloudProviderUrl(
+                                _urlController.text,
+                                provider,
+                              );
+                              _provider = provider;
+                            });
+                          }
+                        : null,
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: Text(
+                      '选择只修改代理路由，不会自动开通服务。阿里接口仍待真实云端验证。上方术语目前仅用于本机识别，云端热词需在服务器配置。',
+                    ),
                   ),
                   if (widget.store.hasBundledConfig) ...[
                     const SizedBox(height: 8),
@@ -229,6 +264,9 @@ class _TranscriptionSettingsScreenState
                     enabled: _enabled,
                     keyboardType: TextInputType.url,
                     autocorrect: false,
+                    onChanged: (value) => setState(
+                      () => _provider = CloudAsrProvider.fromUrl(value),
+                    ),
                     decoration: const InputDecoration(
                       labelText: '安全代理 WebSocket 地址',
                       hintText: 'wss://example.com/v1/asr/tencent/realtime',
@@ -244,7 +282,7 @@ class _TranscriptionSettingsScreenState
                     enableSuggestions: false,
                     decoration: InputDecoration(
                       labelText: '代理访问令牌',
-                      helperText: '这是代理令牌，不是腾讯云 SecretKey',
+                      helperText: '这是代理令牌，不是云厂商 API Key / SecretKey',
                       suffixIcon: IconButton(
                         onPressed: () =>
                             setState(() => _obscureToken = !_obscureToken),
@@ -271,7 +309,7 @@ class _TranscriptionSettingsScreenState
                           SizedBox(width: 12),
                           Expanded(
                             child: Text(
-                              '腾讯云 AppID、SecretID 和 SecretKey 只能配置在代理服务器。'
+                              '云厂商 API Key、AppID、SecretID 和 SecretKey 只能配置在代理服务器。'
                               'App 不保存云厂商密钥，也不会因为断网停止本地录音。',
                             ),
                           ),

@@ -577,7 +577,7 @@ class RecordingTaskHandler extends TaskHandler {
     final samples = usableLength ~/ _bytesPerSample;
     _segmentSamples += samples;
     _timelineSamples += samples;
-    if (_cloudConnected) _cloudTranscriber?.addPcm(bytes);
+    if (_cloudConnected) _cloudTranscriber?.addPcm(bytes, startMs: startMs);
 
     _localAsr?.addPcm(bytes, startMs: startMs, endMs: _timelineMs);
   }
@@ -740,7 +740,7 @@ class RecordingTaskHandler extends TaskHandler {
       'endMs': endMs,
       'text': update.text,
       'speakerLabel': update.speakerId == null || update.speakerId! < 0
-          ? '腾讯云'
+          ? CloudAsrProvider.fromUrl(_cloudProxyUrl).label
           : '讲解人${update.speakerId! + 1}',
     };
     _transcripts.removeWhere((existing) => existing['id'] == item['id']);

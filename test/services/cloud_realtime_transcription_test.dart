@@ -139,14 +139,15 @@ void main() {
     addTearDown(client.close);
     await client.connect();
     await ready.future.timeout(const Duration(seconds: 2));
-    client.addPcm(Uint8List(tencentPcmFrameBytes));
+    // Recognition becomes ready 2.5 seconds after connection was attempted.
+    client.addPcm(Uint8List(tencentPcmFrameBytes), startMs: 7500);
     expect(
       await audioReceived.future.timeout(const Duration(seconds: 2)),
       tencentPcmFrameBytes,
     );
     await client.finish();
     expect(updates.single.text, '网络稳定句');
-    expect(updates.single.startMs, 5100);
-    expect(updates.single.endMs, 5900);
+    expect(updates.single.startMs, 7600);
+    expect(updates.single.endMs, 8400);
   });
 }
