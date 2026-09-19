@@ -38,13 +38,15 @@ class DocumentScannerBridge(private val activity: Activity) {
                     .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_JPEG)
                     .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
                     .build()
-                GmsDocumentScanning.getClient(options).getStartScanIntent(activity)
+                try {
+                    GmsDocumentScanning.getClient(options).getStartScanIntent(activity)
                     .addOnSuccessListener { sender ->
                         try {
                             activity.startIntentSenderForResult(sender, REQUEST, null, 0, 0, 0)
                         } catch (error: Exception) { fail(error) }
                     }
                     .addOnFailureListener { fail(it) }
+                } catch (error: Exception) { fail(error) }
             }
             "pending" -> {
                 val sessionId = call.argument<String>("sessionId")

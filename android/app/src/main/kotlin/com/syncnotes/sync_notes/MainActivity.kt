@@ -10,6 +10,8 @@ class MainActivity : FlutterActivity() {
     private val documentScanner by lazy { DocumentScannerBridge(this) }
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "sync_notes/thumbnail")
+            .setMethodCallHandler(ThumbnailBridge(this)::handle)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "sync_notes/document_scanner")
             .setMethodCallHandler(documentScanner::handle)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "sync_notes/clock")

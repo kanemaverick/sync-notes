@@ -35,6 +35,28 @@ Android 扫描桥使用 ML Kit 16.0.0 单页 JPEG、原生扫描 UI；通过本�
 扫描 SDK 不暴露原始快门时间和未处理图，界面与备注明确提示入口时间及扫描操作范围。
 该模式不能承诺照片/音频误差低于 2 秒；普通连拍仍按按下快门前的单调时钟记录。
 
+## 真机发现的问题及追加修复
+
+- 高分辨率连拍时，Dart 全尺寸解码缩略图导致下一张等待数秒。Android 改用
+  `BitmapFactory.inSampleSize` 原生后台降采样、EXIF 方向修正和最长边 480 的 JPEG 缩略图，
+  原图仍逐字节保留；其他平台保留 isolate 实现。
+  参考 [Android 大图加载文档](https://developer.android.com/topic/performance/graphics/load-bitmap)。
+- release 包第一次启动扫描器触发 `SharedPrefManager` 空引用。反混淆及 SDK 字节码
+  定位到扫描器内部初始化，与 [ML Kit 的 AGP 9 / R8 问题](https://github.com/googlesamples/mlkit/issues/1018)
+  相似。为相关 ML Kit 包增加定向 keep 规则，并捕获同步初始化异常，清除 pending 状态以允许重试。
+  错误提示不再暴露整段 native 堆栈遮挡控制按钮。修复是否生效以 release 真机复测为准。
+
+## 本次已验证（小米 2304FPN6DC，Android 16）
+
+- 覆盖安装保留历史记录，没有卸载或清除数据。
+- 4005 包内置示例音频离线自检返回“昨天是 MONDAY 礼拜二 TOMORROW是星期三”；
+  未使用麦克风、未上传。英文可输出但仍漏词，不能据此声称现场识别准确。
+- 新建 QA 记录，在云转写关闭时录音、连续保存 10 张照片、切回桌面后返回、跨过 5 分钟分片、
+  暂停和继续、结束后保存为 8 分 12 秒。暂停期间重点与暂停节点录音位置同为 7:35，
+  设备时间分别为 01:34:22 和 01:32:55，可区分暂停期间的操作。
+- 静态分析无问题；最新 Flutter 全套 59 项测试通过，包括 native 缩略图通道、fallback、
+  存储错误传播、平台异常提示长度；不等同于 Android 图像像素算法/长时录音全部通过。
+
 ## 待真机验收
 
 - 中英模型和热词自检、离线冷启动；

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:archive/archive_io.dart';
+import 'package:flutter/services.dart';
 import 'package:image/image.dart' as image_lib;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -55,7 +56,7 @@ class MediaStorage {
     final thumbnailPath = p.join(thumbnails.path, 'photo_$stamp.jpg');
     await File(originalPath).writeAsBytes(sourceBytes, flush: true);
 
-    await Isolate.run(() => createPhotoThumbnail(originalPath, thumbnailPath));
+    await writePhotoThumbnail(originalPath, thumbnailPath);
     return StoredPhoto(path: originalPath, thumbnailPath: thumbnailPath);
   }
 
@@ -284,6 +285,27 @@ class MediaStorage {
     }
     return zipFile;
   }
+}
+
+/// Android decodes a subsampled bitmap on a native worker thread. The portable
+/// fallback keeps CPU-heavy full-image decoding off Flutter's UI isolate.
+Future<void> writePhotoThumbnail(
+  String source,
+  String destination, {
+  bool? useNative,
+}) async {
+  if (useNative ?? Platform.isAndroid) {
+    try {
+      await const MethodChannel('sync_notes/thumbnail').invokeMethod<void>(
+        'create',
+        {'source': source, 'destination': destination},
+      );
+      return;
+    } on MissingPluginException {
+      // Non-Android embeddings can continue using the portable implementation.
+    }
+  }
+  await Isolate.run(() => createPhotoThumbnail(source, destination));
 }
 
 /// Full-resolution decoding must not freeze the live controls or camera UI.

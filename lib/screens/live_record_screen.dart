@@ -6,6 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
 
 import '../core/timeline_clock.dart';
+import '../core/user_facing_error.dart';
 import '../core/widgets/permission_explanation_sheet.dart';
 import '../data/app_repository.dart';
 import '../models/entities.dart';
@@ -509,9 +510,9 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
 
   void _showPhotoError(String title, Object error) {
     if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('$title：$error')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$title：${userFacingError(error)}')),
+      );
     }
   }
 

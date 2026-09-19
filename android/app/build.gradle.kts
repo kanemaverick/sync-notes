@@ -27,6 +27,7 @@ android {
 
     buildTypes {
         release {
+            proguardFiles("proguard-rules.pro")
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
@@ -45,5 +46,6 @@ flutter {
 }
 
 dependencies {
+    implementation("androidx.exifinterface:exifinterface:1.4.2")
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0")
 }
