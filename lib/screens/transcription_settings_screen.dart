@@ -6,9 +6,14 @@ import '../services/local_transcription_settings.dart';
 import '../services/asr_diagnostics.dart';
 
 class TranscriptionSettingsScreen extends StatefulWidget {
-  const TranscriptionSettingsScreen({required this.store, super.key});
+  const TranscriptionSettingsScreen({
+    required this.store,
+    this.localStore,
+    super.key,
+  });
 
   final CloudTranscriptionSettingsStore store;
+  final LocalTranscriptionSettingsStore? localStore;
 
   @override
   State<TranscriptionSettingsScreen> createState() =>
@@ -21,7 +26,8 @@ class _TranscriptionSettingsScreenState
   final _urlController = TextEditingController();
   final _tokenController = TextEditingController();
   final _hotwordsController = TextEditingController();
-  final _localStore = LocalTranscriptionSettingsStore();
+  late final _localStore =
+      widget.localStore ?? LocalTranscriptionSettingsStore();
   OfflineAsrModel _localModel = OfflineAsrModel.bilingual;
   bool _enabled = false;
   bool _loading = true;
@@ -29,6 +35,7 @@ class _TranscriptionSettingsScreenState
   bool _obscureToken = true;
   bool _testing = false;
   CloudAsrProvider _provider = CloudAsrProvider.custom;
+  bool _loadFailed = false;
 
   Future<void> _checkModel() async {
     if (await FlutterForegroundTask.isRunningService) {
@@ -84,18 +91,30 @@ class _TranscriptionSettingsScreenState
   }
 
   Future<void> _load() async {
-    final config = await widget.store.load();
-    final local = await _localStore.load();
-    if (!mounted) return;
     setState(() {
-      _enabled = config.enabled;
-      _localModel = local.model;
-      _hotwordsController.text = local.hotwords.join('\n');
-      _urlController.text = config.proxyUrl;
-      _provider = CloudAsrProvider.fromUrl(config.proxyUrl);
-      _tokenController.text = config.accessToken;
-      _loading = false;
+      _loading = true;
+      _loadFailed = false;
     });
+    try {
+      final config = await widget.store.load();
+      final local = await _localStore.load();
+      if (!mounted) return;
+      setState(() {
+        _enabled = config.enabled;
+        _localModel = local.model;
+        _hotwordsController.text = local.hotwords.join('\n');
+        _urlController.text = config.proxyUrl;
+        _provider = CloudAsrProvider.fromUrl(config.proxyUrl);
+        _tokenController.text = config.accessToken;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _loadFailed = true;
+      });
+    }
   }
 
   Future<void> _save() async {
@@ -153,6 +172,16 @@ class _TranscriptionSettingsScreenState
       appBar: AppBar(title: const Text('实时转写设置')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
+          : _loadFailed
+          ? Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('读取转写设置失败，原有配置未修改'),
+                  TextButton(onPressed: _load, child: const Text('重试')),
+                ],
+              ),
+            )
           : Form(
               key: _formKey,
               child: ListView(
