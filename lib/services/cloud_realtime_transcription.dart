@@ -149,6 +149,7 @@ class CloudRealtimeTranscriber {
     required this.sessionId,
     required this.baseOffsetMs,
     required this.onEvent,
+    this.readyTimeout = const Duration(seconds: 10),
   });
 
   final String proxyUrl;
@@ -156,12 +157,15 @@ class CloudRealtimeTranscriber {
   final String sessionId;
   final int baseOffsetMs;
   final void Function(CloudProxyEvent event) onEvent;
+  final Duration readyTimeout;
 
   final PcmFrameBuffer _frames = PcmFrameBuffer();
   final Completer<void> _finalResponse = Completer<void>();
   WebSocket? _socket;
   StreamSubscription<dynamic>? _subscription;
   bool _closed = false;
+  bool _terminalReceived = false;
+  Timer? _readyTimer;
   int? _audioBaseOffsetMs;
 
   Future<void> connect() async {
@@ -183,6 +187,13 @@ class CloudRealtimeTranscriber {
     }
     socket.pingInterval = const Duration(seconds: 5);
     _socket = socket;
+    _readyTimer = Timer(readyTimeout, () {
+      if (_closed || _terminalReceived) return;
+      _terminalReceived = true;
+      if (!_finalResponse.isCompleted) _finalResponse.complete();
+      onEvent(const CloudProxyFailure('云端服务未及时就绪，已回退本地字幕'));
+      unawaited(close());
+    });
     _subscription = socket.listen(
       (message) {
         final event = parseCloudProxyMessage(
@@ -190,7 +201,13 @@ class CloudRealtimeTranscriber {
           baseOffsetMs: _audioBaseOffsetMs ?? baseOffsetMs,
         );
         if (event != null) {
+          if (event is CloudProxyReady ||
+              event is CloudProxyFinished ||
+              event is CloudProxyFailure) {
+            _readyTimer?.cancel();
+          }
           if (event is CloudProxyFinished || event is CloudProxyFailure) {
+            _terminalReceived = true;
             if (!_finalResponse.isCompleted) _finalResponse.complete();
           }
           onEvent(event);
@@ -198,11 +215,15 @@ class CloudRealtimeTranscriber {
       },
       onError: (Object error) {
         if (!_finalResponse.isCompleted) _finalResponse.complete();
-        if (!_closed) onEvent(CloudProxyFailure('云端连接中断：$error'));
+        if (!_closed && !_terminalReceived) {
+          onEvent(const CloudProxyFailure('云端连接中断，请检查网络或服务配置'));
+        }
       },
       onDone: () {
         if (!_finalResponse.isCompleted) _finalResponse.complete();
-        if (!_closed) onEvent(const CloudProxyFailure('云端连接已断开'));
+        if (!_closed && !_terminalReceived) {
+          onEvent(const CloudProxyFailure('云端连接已断开'));
+        }
       },
       cancelOnError: false,
     );
@@ -241,6 +262,7 @@ class CloudRealtimeTranscriber {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    _readyTimer?.cancel();
     await _subscription?.cancel();
     await _socket?.close(WebSocketStatus.normalClosure);
   }

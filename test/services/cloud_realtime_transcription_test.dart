@@ -8,6 +8,34 @@ import 'package:sync_notes/services/cloud_realtime_transcription.dart';
 import 'package:sync_notes/services/cloud_transcription_settings.dart';
 
 void main() {
+  test('代理不返回就绪时超时回退而不是永久等待', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    final serverTask = server.first.then((request) async {
+      final socket = await WebSocketTransformer.upgrade(request);
+      await socket.drain<void>();
+    });
+    final failure = Completer<CloudProxyFailure>();
+    final client = CloudRealtimeTranscriber(
+      proxyUrl: 'ws://127.0.0.1:${server.port}/asr',
+      accessToken: 'test-token',
+      sessionId: 'test-session',
+      baseOffsetMs: 0,
+      readyTimeout: const Duration(milliseconds: 30),
+      onEvent: (event) {
+        if (event is CloudProxyFailure && !failure.isCompleted) {
+          failure.complete(event);
+        }
+      },
+    );
+    addTearDown(client.close);
+    await client.connect();
+    expect(
+      (await failure.future.timeout(const Duration(seconds: 2))).message,
+      contains('未及时就绪'),
+    );
+    await serverTask.timeout(const Duration(seconds: 2));
+  });
   test('新安装默认使用 APK 内置的云转写配置', () {
     const bundled = CloudTranscriptionConfig(
       enabled: true,
