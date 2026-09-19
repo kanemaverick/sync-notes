@@ -65,7 +65,7 @@ class SettingsHubScreen extends StatelessWidget {
           child: ListTile(
             leading: Icon(Icons.info_outline_rounded),
             title: Text('同步讲记'),
-            subtitle: Text('本地优先多模态学习记录工具\n版本 1.1.1'),
+            subtitle: Text('本地优先多模态学习记录工具\n版本 1.2.0'),
             isThreeLine: true,
           ),
         ),

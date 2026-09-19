@@ -14,6 +14,7 @@ import 'cloud_realtime_transcription.dart';
 import 'cloud_transcription_settings.dart';
 import 'live_transcription_service.dart';
 import 'local_asr_worker.dart';
+import 'local_transcription_settings.dart';
 import 'media_storage.dart';
 
 const _sessionIdKey = 'recording.sessionId';
@@ -23,6 +24,8 @@ const _asrEncoderKey = 'recording.asrEncoder';
 const _asrDecoderKey = 'recording.asrDecoder';
 const _asrJoinerKey = 'recording.asrJoiner';
 const _asrTokensKey = 'recording.asrTokens';
+const _asrBpeKey = 'recording.asrBpe';
+const _asrHotwordsKey = 'recording.asrHotwords';
 const _cloudEnabledKey = 'recording.cloudEnabled';
 const _cloudProxyUrlKey = 'recording.cloudProxyUrl';
 const _cloudAccessTokenKey = 'recording.cloudAccessToken';
@@ -99,7 +102,8 @@ class BackgroundRecordingService {
     final root = await storage.sessionDirectory(session.id);
     TranscriptionModelFiles? model;
     try {
-      model = await prepareTranscriptionModel();
+      final local = await LocalTranscriptionSettingsStore().load();
+      model = await prepareTranscriptionModel(config: local);
     } catch (_) {
       // Missing/corrupt model assets must never prevent microphone recording.
     }
@@ -122,6 +126,14 @@ class BackgroundRecordingService {
     await FlutterForegroundTask.saveData(
       key: _asrTokensKey,
       value: model?.tokens ?? '',
+    );
+    await FlutterForegroundTask.saveData(
+      key: _asrBpeKey,
+      value: model?.bpeVocab ?? '',
+    );
+    await FlutterForegroundTask.saveData(
+      key: _asrHotwordsKey,
+      value: model?.hotwordsFile ?? '',
     );
     await FlutterForegroundTask.saveData(
       key: _cloudEnabledKey,
@@ -318,7 +330,7 @@ class RecordingException implements Exception {
 Future<void> waitForFinalizedRecordingManifest({
   required Directory sessionDirectory,
   required int expectedOffsetMs,
-  Duration timeout = const Duration(seconds: 10),
+  Duration timeout = const Duration(seconds: 20),
   Duration pollInterval = const Duration(milliseconds: 100),
 }) async {
   final manifest = File(
@@ -339,7 +351,11 @@ Future<void> waitForFinalizedRecordingManifest({
         });
         // The service persists its active offset once per second. Final media
         // must cover at least that saved position before review can load it.
-        if (segments.isNotEmpty && finalizedDurationMs >= expectedOffsetMs) {
+        final captionsFinished =
+            !json.containsKey('finalized') || json['finalized'] == true;
+        if (captionsFinished &&
+            (segments.isNotEmpty || expectedOffsetMs == 0) &&
+            finalizedDurationMs >= expectedOffsetMs) {
           return;
         }
       }
@@ -393,6 +409,7 @@ class RecordingTaskHandler extends TaskHandler {
   bool _cloudConnecting = false;
   bool _cloudConnected = false;
   bool _destroyed = false;
+  bool _finalized = false;
   Future<void> _manifestWrites = Future<void>.value();
 
   int get _timelineMs => _timelineSamples * 1000 ~/ asrSampleRate;
@@ -483,6 +500,11 @@ class RecordingTaskHandler extends TaskHandler {
       final tokens = await FlutterForegroundTask.getData<String>(
         key: _asrTokensKey,
       );
+      final bpe =
+          await FlutterForegroundTask.getData<String>(key: _asrBpeKey) ?? '';
+      final hotwords =
+          await FlutterForegroundTask.getData<String>(key: _asrHotwordsKey) ??
+          '';
       if (_destroyed) return;
       if ([
         encoder,
@@ -499,6 +521,8 @@ class RecordingTaskHandler extends TaskHandler {
           decoder: decoder!,
           joiner: joiner!,
           tokens: tokens!,
+          bpeVocab: bpe,
+          hotwordsFile: hotwords,
         ),
       );
     } catch (error) {
@@ -886,6 +910,7 @@ class RecordingTaskHandler extends TaskHandler {
       'segments': _segments,
       'events': _events,
       'transcripts': _transcripts,
+      'finalized': _finalized,
     });
     final write = _manifestWrites.then((_) async {
       final target = File(p.join(_sessionDir, 'recording_manifest.json'));
@@ -902,8 +927,8 @@ class RecordingTaskHandler extends TaskHandler {
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
     _destroyed = true;
     await _completeSegment();
-    await _flushRecognition();
-    await _finishCloud();
+    await Future.wait([_flushRecognition(), _finishCloud()]);
+    _finalized = true;
     await _writeManifest();
     await _stateSubscription?.cancel();
     await _recorder.dispose();

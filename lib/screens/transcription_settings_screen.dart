@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import '../services/cloud_transcription_settings.dart';
+import '../services/local_transcription_settings.dart';
+import '../services/asr_diagnostics.dart';
 
 class TranscriptionSettingsScreen extends StatefulWidget {
   const TranscriptionSettingsScreen({required this.store, super.key});
@@ -17,10 +20,61 @@ class _TranscriptionSettingsScreenState
   final _formKey = GlobalKey<FormState>();
   final _urlController = TextEditingController();
   final _tokenController = TextEditingController();
+  final _hotwordsController = TextEditingController();
+  final _localStore = LocalTranscriptionSettingsStore();
+  OfflineAsrModel _localModel = OfflineAsrModel.bilingual;
   bool _enabled = false;
   bool _loading = true;
   bool _saving = false;
   bool _obscureToken = true;
+  bool _testing = false;
+
+  Future<void> _checkModel() async {
+    if (await FlutterForegroundTask.isRunningService) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('请先结束当前录音再做模型自检，避免争用计算资源')),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _testing = true);
+    try {
+      final text = await checkOfflineRecognizer(
+        LocalTranscriptionConfig(
+          model: _localModel,
+          hotwords: normalizeHotwords(_hotwordsController.text),
+        ),
+      );
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('本机离线识别自检完成'),
+          content: SingleChildScrollView(
+            child: SelectableText(
+              '测试音频：中文夹杂英文星期词。\n\n识别结果：\n$text\n\n本次仅处理安装包里的示例音频，不使用麦克风，也未上传。自检通过不代表会议现场准确率。',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('关闭'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('离线模型自检失败：$error')));
+      }
+    } finally {
+      if (mounted) setState(() => _testing = false);
+    }
+  }
 
   @override
   void initState() {
@@ -30,9 +84,12 @@ class _TranscriptionSettingsScreenState
 
   Future<void> _load() async {
     final config = await widget.store.load();
+    final local = await _localStore.load();
     if (!mounted) return;
     setState(() {
       _enabled = config.enabled;
+      _localModel = local.model;
+      _hotwordsController.text = local.hotwords.join('\n');
       _urlController.text = config.proxyUrl;
       _tokenController.text = config.accessToken;
       _loading = false;
@@ -42,15 +99,30 @@ class _TranscriptionSettingsScreenState
   Future<void> _save() async {
     if (_enabled && !_formKey.currentState!.validate()) return;
     setState(() => _saving = true);
-    await widget.store.save(
-      CloudTranscriptionConfig(
-        enabled: _enabled,
-        proxyUrl: _urlController.text,
-        accessToken: _tokenController.text,
-      ),
-    );
-    if (!mounted) return;
-    Navigator.pop(context, true);
+    try {
+      await _localStore.save(
+        LocalTranscriptionConfig(
+          model: _localModel,
+          hotwords: normalizeHotwords(_hotwordsController.text),
+        ),
+      );
+      await widget.store.save(
+        CloudTranscriptionConfig(
+          enabled: _enabled,
+          proxyUrl: _urlController.text,
+          accessToken: _tokenController.text,
+        ),
+      );
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('保存失败：$error')));
+      }
+    }
   }
 
   Future<void> _restoreBundledConfig() async {
@@ -68,6 +140,7 @@ class _TranscriptionSettingsScreenState
   void dispose() {
     _urlController.dispose();
     _tokenController.dispose();
+    _hotwordsController.dispose();
     super.dispose();
   }
 
@@ -82,6 +155,51 @@ class _TranscriptionSettingsScreenState
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
+                  Text('本机离线识别', style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<OfflineAsrModel>(
+                    initialValue: _localModel,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: '离线模型'),
+                    items: const [
+                      DropdownMenuItem(
+                        value: OfflineAsrModel.bilingual,
+                        child: Text('中英双语 · 会议推荐'),
+                      ),
+                      DropdownMenuItem(
+                        value: OfflineAsrModel.chinese,
+                        child: Text('轻量中文 · 低负载'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) setState(() => _localModel = value);
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _hotwordsController,
+                    minLines: 3,
+                    maxLines: 5,
+                    maxLength: 4000,
+                    decoration: const InputDecoration(
+                      labelText: '会议术语 / 人名 / 英文缩写',
+                      hintText: 'Transformer\n神经网络\nPPT\nGPU',
+                      helperText: '每行一个，最多 80 项、每项 60 字。仅影响下次录音；热词不能保证识别准确。',
+                      helperMaxLines: 3,
+                    ),
+                  ),
+                  const Text('模型随 App 安装，无需网络或电脑。热词会增加计算量；录音始终优先，字幕仅作为初稿。'),
+                  OutlinedButton.icon(
+                    onPressed: _testing ? null : _checkModel,
+                    icon: _testing
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.fact_check_outlined),
+                    label: Text(_testing ? '正在本机自检，请稍候…' : '验证当前离线模型（不录音、不联网）'),
+                  ),
+                  const Divider(height: 40),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     title: const Text('启用腾讯云实时转写'),
