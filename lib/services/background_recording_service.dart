@@ -7,13 +7,13 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path/path.dart' as p;
 import 'package:record/record.dart';
-import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
 import '../data/app_repository.dart';
 import '../models/entities.dart';
 import 'cloud_realtime_transcription.dart';
 import 'cloud_transcription_settings.dart';
 import 'live_transcription_service.dart';
+import 'local_asr_worker.dart';
 import 'media_storage.dart';
 
 const _sessionIdKey = 'recording.sessionId';
@@ -97,26 +97,31 @@ class BackgroundRecordingService {
       throw const RecordingException('已有一条记录正在录音，请先结束它。');
     }
     final root = await storage.sessionDirectory(session.id);
-    final model = await prepareTranscriptionModel();
+    TranscriptionModelFiles? model;
+    try {
+      model = await prepareTranscriptionModel();
+    } catch (_) {
+      // Missing/corrupt model assets must never prevent microphone recording.
+    }
     final cloud = await cloudSettings.load();
     await FlutterForegroundTask.saveData(key: _sessionIdKey, value: session.id);
     await FlutterForegroundTask.saveData(key: _sessionDirKey, value: root.path);
     await FlutterForegroundTask.saveData(key: _activeOffsetKey, value: 0);
     await FlutterForegroundTask.saveData(
       key: _asrEncoderKey,
-      value: model.encoder,
+      value: model?.encoder ?? '',
     );
     await FlutterForegroundTask.saveData(
       key: _asrDecoderKey,
-      value: model.decoder,
+      value: model?.decoder ?? '',
     );
     await FlutterForegroundTask.saveData(
       key: _asrJoinerKey,
-      value: model.joiner,
+      value: model?.joiner ?? '',
     );
     await FlutterForegroundTask.saveData(
       key: _asrTokensKey,
-      value: model.tokens,
+      value: model?.tokens ?? '',
     );
     await FlutterForegroundTask.saveData(
       key: _cloudEnabledKey,
@@ -364,23 +369,19 @@ class RecordingTaskHandler extends TaskHandler {
   StreamSubscription<RecordState>? _stateSubscription;
   StreamSubscription<Uint8List>? _audioSubscription;
   RandomAccessFile? _audioFile;
-  sherpa.OnlineRecognizer? _recognizer;
-  sherpa.OnlineStream? _recognitionStream;
+  LocalAsrWorker? _localAsr;
   CloudRealtimeTranscriber? _cloudTranscriber;
 
   String _sessionId = '';
   String _sessionDir = '';
   String _currentAudioPath = '';
-  String _lastPartialText = '';
   String _cloudProxyUrl = '';
   String _cloudAccessToken = '';
   int _timelineSamples = 0;
   int _segmentStartSamples = 0;
   int _segmentSamples = 0;
-  int _utteranceStartMs = 0;
   int _sequence = 0;
   int _transcriptSequence = 0;
-  int _lastPartialSentMs = -1000;
   int _nextCloudRetryMs = 0;
   int _cloudRetrySeconds = 2;
   int _cloudConnectionSequence = 0;
@@ -391,6 +392,8 @@ class RecordingTaskHandler extends TaskHandler {
   bool _cloudEnabled = false;
   bool _cloudConnecting = false;
   bool _cloudConnected = false;
+  bool _destroyed = false;
+  Future<void> _manifestWrites = Future<void>.value();
 
   int get _timelineMs => _timelineSamples * 1000 ~/ asrSampleRate;
   int get _segmentStartMs => _segmentStartSamples * 1000 ~/ asrSampleRate;
@@ -408,8 +411,9 @@ class RecordingTaskHandler extends TaskHandler {
     await _restoreExistingManifest();
     _stateSubscription = _recorder.onStateChanged().listen(_onRecorderState);
     await _loadCloudConfiguration();
-    await _initializeRecognizer();
+    _localAsr = LocalAsrWorker(onEvent: _onLocalAsrEvent);
     await _startSegment();
+    unawaited(_initializeRecognizer());
     if (_cloudEnabled) unawaited(_connectCloud());
   }
 
@@ -438,7 +442,6 @@ class RecordingTaskHandler extends TaskHandler {
       _timelineSamples = durationMs * asrSampleRate ~/ 1000;
       _sequence = segments.length;
       _transcriptSequence = _transcripts.length;
-      _utteranceStartMs = durationMs;
     } catch (_) {
       // A malformed manifest must not prevent a new recoverable segment.
     }
@@ -480,10 +483,17 @@ class RecordingTaskHandler extends TaskHandler {
       final tokens = await FlutterForegroundTask.getData<String>(
         key: _asrTokensKey,
       );
-      if ([encoder, decoder, joiner, tokens].any((value) => value == null)) {
+      if (_destroyed) return;
+      if ([
+        encoder,
+        decoder,
+        joiner,
+        tokens,
+      ].any((value) => value == null || value.isEmpty)) {
         throw StateError('缺少实时转写模型');
       }
-      _recognizer = createOnlineRecognizer(
+      final worker = _localAsr!;
+      await worker.start(
         TranscriptionModelFiles(
           encoder: encoder!,
           decoder: decoder!,
@@ -491,11 +501,6 @@ class RecordingTaskHandler extends TaskHandler {
           tokens: tokens!,
         ),
       );
-      _recognitionStream = _recognizer!.createStream();
-      FlutterForegroundTask.sendDataToMain({
-        'type': 'transcriptionStatus',
-        'ready': true,
-      });
     } catch (error) {
       _disableRecognizer(error);
     }
@@ -505,10 +510,11 @@ class RecordingTaskHandler extends TaskHandler {
   void onRepeatEvent(DateTime timestamp) => unawaited(_onTick());
 
   Future<void> _onTick() async {
+    if (_destroyed) return;
     await _rewriteWavHeader(flush: true);
     if (_manifestDirty) {
-      await _writeManifest();
       _manifestDirty = false;
+      await _writeManifest();
     }
     await FlutterForegroundTask.saveData(
       key: _activeOffsetKey,
@@ -563,52 +569,55 @@ class RecordingTaskHandler extends TaskHandler {
     final bytes = usableLength == data.length
         ? data
         : Uint8List.sublistView(data, 0, usableLength);
+    final startMs = _timelineMs;
     _audioFile?.writeFromSync(bytes);
     final samples = usableLength ~/ _bytesPerSample;
     _segmentSamples += samples;
     _timelineSamples += samples;
     if (_cloudConnected) _cloudTranscriber?.addPcm(bytes);
 
-    final recognizer = _recognizer;
-    final recognitionStream = _recognitionStream;
-    if (recognizer == null || recognitionStream == null) return;
-    try {
-      recognitionStream.acceptWaveform(
-        samples: pcm16BytesToFloat32(bytes),
-        sampleRate: asrSampleRate,
-      );
-      while (recognizer.isReady(recognitionStream)) {
-        recognizer.decode(recognitionStream);
-      }
-      final text = recognizer.getResult(recognitionStream).text.trim();
-      if (text != _lastPartialText &&
-          (_timelineMs - _lastPartialSentMs >= 250 || text.isEmpty)) {
-        _lastPartialText = text;
-        _lastPartialSentMs = _timelineMs;
+    _localAsr?.addPcm(bytes, startMs: startMs, endMs: _timelineMs);
+  }
+
+  void _onLocalAsrEvent(Map<String, Object?> event) {
+    switch (event['type']) {
+      case 'ready':
+        FlutterForegroundTask.sendDataToMain({
+          'type': 'transcriptionStatus',
+          'ready': true,
+        });
+      case 'error':
+        _disableRecognizer(event['error'] ?? '本地字幕不可用');
+      case 'partial':
         if (!_cloudConnected) {
           FlutterForegroundTask.sendDataToMain({
+            ...event,
             'type': 'transcriptPartial',
             'source': 'local',
-            'startMs': _utteranceStartMs,
-            'endMs': _timelineMs,
-            'text': text,
           });
         }
-      }
-      if (recognizer.isEndpoint(recognitionStream)) {
-        _saveTranscript(text, _timelineMs);
-        recognizer.reset(recognitionStream);
-      }
-    } catch (error) {
-      _disableRecognizer(error);
+      case 'final':
+        _saveTranscript(
+          event['text']! as String,
+          event['startMs']! as int,
+          event['endMs']! as int,
+        );
     }
   }
 
-  void _saveTranscript(String text, int endMs) {
+  void _saveTranscript(String text, int startMs, int endMs) {
+    // A late worker result must not reintroduce text already replaced by cloud ASR.
+    if (_transcripts.any(
+      (item) =>
+          item['speakerLabel'] != '本地初稿' &&
+          (item['startMs']! as int) < endMs &&
+          (item['endMs']! as int) > startMs,
+    ))
+      return;
     if (text.isNotEmpty) {
       final item = <String, Object?>{
         'id': '$_sessionId-transcript-$_transcriptSequence',
-        'startMs': _utteranceStartMs,
+        'startMs': startMs,
         'endMs': endMs,
         'text': text,
         'speakerLabel': '本地初稿',
@@ -624,32 +633,14 @@ class RecordingTaskHandler extends TaskHandler {
         });
       }
     }
-    _utteranceStartMs = endMs;
-    _lastPartialText = '';
   }
 
   Future<void> _flushRecognition() async {
-    final recognizer = _recognizer;
-    final stream = _recognitionStream;
-    if (recognizer == null || stream == null) return;
-    try {
-      stream.inputFinished();
-      while (recognizer.isReady(stream)) {
-        recognizer.decode(stream);
-      }
-      _saveTranscript(recognizer.getResult(stream).text.trim(), _timelineMs);
-      stream.free();
-      _recognitionStream = recognizer.createStream();
-    } catch (error) {
-      _disableRecognizer(error);
-    }
+    await _localAsr?.flush();
   }
 
   void _disableRecognizer(Object error) {
-    _recognitionStream?.free();
-    _recognizer?.free();
-    _recognitionStream = null;
-    _recognizer = null;
+    _localAsr?.close();
     FlutterForegroundTask.sendDataToMain({
       'type': 'transcriptionStatus',
       'ready': false,
@@ -859,7 +850,6 @@ class RecordingTaskHandler extends TaskHandler {
     _manualTransition = true;
     await _recorder.resume();
     _paused = false;
-    _utteranceStartMs = _timelineMs;
     if (_cloudEnabled) unawaited(_connectCloud());
     await _addEvent('用户继续录音');
     _manualTransition = false;
@@ -890,30 +880,33 @@ class RecordingTaskHandler extends TaskHandler {
     await _writeManifest();
   }
 
-  Future<void> _writeManifest() async {
-    final target = File(p.join(_sessionDir, 'recording_manifest.json'));
-    final temporary = File('${target.path}.tmp');
-    await temporary.writeAsString(
-      jsonEncode({
-        'segments': _segments,
-        'events': _events,
-        'transcripts': _transcripts,
-      }),
-      flush: true,
-    );
-    if (await target.exists()) await target.delete();
-    await temporary.rename(target.path);
+  Future<void> _writeManifest() {
+    final snapshot = jsonEncode({
+      'segments': _segments,
+      'events': _events,
+      'transcripts': _transcripts,
+    });
+    final write = _manifestWrites.then((_) async {
+      final target = File(p.join(_sessionDir, 'recording_manifest.json'));
+      final temporary = File('${target.path}.tmp');
+      await temporary.writeAsString(snapshot, flush: true);
+      // Atomic replacement on Android/iOS. Never delete the last good manifest.
+      await temporary.rename(target.path);
+    });
+    _manifestWrites = write.catchError((Object _) {});
+    return write;
   }
 
   @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
-    await _flushRecognition();
+    _destroyed = true;
     await _completeSegment();
+    await _flushRecognition();
     await _finishCloud();
+    await _writeManifest();
     await _stateSubscription?.cancel();
     await _recorder.dispose();
-    _recognitionStream?.free();
-    _recognizer?.free();
+    _localAsr?.close();
     await FlutterForegroundTask.saveData(
       key: _activeOffsetKey,
       value: _timelineMs,
