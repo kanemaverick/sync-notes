@@ -58,3 +58,19 @@ App 选择项尚未包含在手机的 4010 安装包内，需下一次构建安�
 - https://github.com/volcengine/ai-app-lab/blob/main/arkitect/core/component/asr/asr_client.py
 - https://github.com/volcengine/ai-app-lab/blob/main/arkitect/utils/binary_protocol.py
 - https://github.com/volcengine/ai-app-lab/blob/main/arkitect/core/component/asr/model.py
+
+## 4011 安装与完成度核对
+
+已构建并使用 `adb install -r` 覆盖安装 1.2.1+4011；手机包信息确认 versionCode=4011。
+APK：`build/app/outputs/flutter-apk/sync-notes-1.2.1-4011-arm64.apk`。
+SHA256：`a8a9df9de12aa6491e0209203f127427dd7e3dab313efaffb24b898d937471d5`。
+74 项 Flutter 测试、15 项 Python 测试和 Flutter 静态检查通过。
+部署 ZIP 实际导入 app/aliyun_asr/doubao_asr 成功，包含三条路由。
+
+完成目标仍未成立：
+- USB 供电保持亮屏设置值为 2，但安全锁屏仍 showing=true；未绕过锁屏。
+- 新版未完成真机 UI、连续20张照片、两次异常续录、60分钟后台录音验收。
+- 环境未设置阿里/豆包密钥，两个已知项目 .env 文件不存在；未搜索其他应用的凭据。
+- 新云服务代理未部署，未测真实识别准确率、延迟、热词收益。
+- 市面上其他 ASR 服务未接入；不能把三条接口称为所有主流服务均可用。
+- 安装未执行卸载或清除数据；锁屏下尚未在 UI 复核原有记录。

@@ -2,6 +2,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sync_notes/services/cloud_transcription_settings.dart';
 
 void main() {
+  test('所有内置服务均可切换路径并反向识别', () {
+    for (final provider in CloudAsrProvider.values) {
+      if (provider == CloudAsrProvider.custom) continue;
+      final url = cloudProviderUrl('wss://asr.example.com/old', provider);
+      expect(CloudAsrProvider.fromUrl(url), provider);
+      expect(Uri.parse(url).host, 'asr.example.com');
+    }
+  });
   test('旧腾讯地址无需迁移，新阿里地址正确显示来源', () {
     expect(
       CloudAsrProvider.fromUrl('wss://test/v1/asr/tencent/realtime'),
