@@ -287,7 +287,12 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
     );
     await widget.repository.insertTimelineEvent(event);
     if (mounted) {
-      if (type != TimelineEventType.chapter || offsetOverride != 0) {
+      // The camera shows its own durable saved-count. A global snackbar would
+      // cover its shutter for two seconds and swallow the next capture tap.
+      final cameraPhoto =
+          type == TimelineEventType.photo && photoSource == 'camera';
+      if (!cameraPhoto &&
+          (type != TimelineEventType.chapter || offsetOverride != 0)) {
         HapticFeedback.selectionClick();
         final label = type == TimelineEventType.highlight
             ? '已标记重点'
