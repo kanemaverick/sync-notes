@@ -74,6 +74,10 @@
 
 ## 技术结构
 
+Android 缩略图采用原生后台降采样与 EXIF 方向修正，不改写原图；原生单元测试可在
+`android/` 目录执行 `./gradlew :app:testDebugUnitTest -Ptarget-platform=android-arm64`。
+真机问题与复测情况见 [2026-09 优化记录](docs/optimization-2026-09.md)。
+
 ```text
 lib/
   core/       单调时钟、暂停映射、分片 seek 映射、主题和通用状态组件

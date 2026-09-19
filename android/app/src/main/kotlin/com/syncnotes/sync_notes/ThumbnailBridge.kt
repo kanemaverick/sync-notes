@@ -37,8 +37,7 @@ class ThumbnailBridge(private val activity: Activity) {
                 require(options.outWidth > 0 && options.outHeight > 0) { "无法读取照片尺寸" }
                 val originalWidth = options.outWidth
                 val originalHeight = options.outHeight
-                val longest = max(originalWidth, originalHeight)
-                while (longest / (options.inSampleSize * 2) >= 480) options.inSampleSize *= 2
+                options.inSampleSize = thumbnailSampleSize(originalWidth, originalHeight)
                 options.inJustDecodeBounds = false
                 var bitmap = requireNotNull(BitmapFactory.decodeFile(input.path, options))
                 bitmaps.add(bitmap)

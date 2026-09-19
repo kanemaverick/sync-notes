@@ -297,6 +297,8 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
             ? '已保存备注'
             : type == TimelineEventType.chapter
             ? '已开始新章节'
+            : type == TimelineEventType.interruption
+            ? (title ?? '录音状态已记录')
             : '照片已加入时间轴';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

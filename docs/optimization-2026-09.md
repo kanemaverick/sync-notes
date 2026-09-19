@@ -45,6 +45,10 @@ Android 扫描桥使用 ML Kit 16.0.0 单页 JPEG、原生扫描 UI；通过本�
   定位到扫描器内部初始化，与 [ML Kit 的 AGP 9 / R8 问题](https://github.com/googlesamples/mlkit/issues/1018)
   相似。为相关 ML Kit 包增加定向 keep 规则，并捕获同步初始化异常，清除 pending 状态以允许重试。
   错误提示不再暴露整段 native 堆栈遮挡控制按钮。修复是否生效以 release 真机复测为准。
+- 4006 release 真机复测已进入 Google 扫描界面并完成拍摄、裁边预览。保存阶段进一步发现
+  `BitmapFactory.Options.inSampleSize` 默认值是 0，初版缩略图出现除零错误；4007 明确从 1
+  计算采样比例，增加 4 项 Kotlin/JUnit 边界测试，均已通过。失败扫描未被 acknowledge，
+  原件与恢复日志仍保留，待再次进入现场页导入。
 
 ## 本次已验证（小米 2304FPN6DC，Android 16）
 
