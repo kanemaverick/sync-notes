@@ -90,6 +90,36 @@ CloudProxyEvent? parseCloudProxyMessage(
     return CloudProxyFailure('腾讯云识别错误 $code：${map['message'] ?? '未知错误'}');
   }
   if (_asInt(map['final']) == 1) return const CloudProxyFinished();
+  // Tencent's deployed real-time endpoint can return the result/slice_type
+  // envelope even when using the 2.0 model. Model version is not wire format.
+  final rawResult = map['result'];
+  if (rawResult is Map) {
+    final text = rawResult['voice_text_str'];
+    final index = _asInt(rawResult['index']);
+    final start = _asInt(rawResult['start_time']);
+    final end = _asInt(rawResult['end_time']);
+    final slice = _asInt(rawResult['slice_type']);
+    if (text is! String ||
+        index == null ||
+        index < 0 ||
+        start == null ||
+        start < 0 ||
+        end == null ||
+        end < start ||
+        slice == null ||
+        slice < 0 ||
+        slice > 2) {
+      return const CloudProxyFailure('腾讯云转写片段格式或时间戳无效');
+    }
+    if (text.trim().isEmpty) return null;
+    return CloudTranscriptUpdate(
+      sentenceId: index,
+      text: text.trim(),
+      startMs: baseOffsetMs + start,
+      endMs: baseOffsetMs + end,
+      isFinal: slice == 2,
+    );
+  }
   final rawSentence = map['sentences'];
   if (rawSentence is! Map) return null;
   final sentence = Map<String, dynamic>.from(rawSentence);
@@ -180,7 +210,7 @@ class CloudRealtimeTranscriber {
     final socket = await WebSocket.connect(
       uri.toString(),
       headers: {'Authorization': 'Bearer $accessToken'},
-    ).timeout(const Duration(seconds: 8));
+    ).timeout(const Duration(seconds: 20));
     if (_closed) {
       await socket.close();
       return;
