@@ -83,7 +83,7 @@ class MockAiProcessingService implements AiProcessingService {
         ..writeln('记录到 $questions 个“没听懂”节点。Codex 整理时应优先结合每个节点前后约45秒的转写重新解释。')
         ..writeln();
     }
-    if (includePrompt)
+    if (includePrompt) {
       buffer
         ..writeln('## 交给 Codex 的整理提示词')
         ..writeln()
@@ -93,6 +93,7 @@ class MockAiProcessingService implements AiProcessingService {
         ..writeln()
         ..writeln('---')
         ..writeln('生成器：同步讲记记录整理器（无需API密钥）');
+    }
     return buffer.toString();
   }
 }
