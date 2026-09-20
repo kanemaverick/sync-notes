@@ -29,6 +29,7 @@ void main() {
     expect(find.text('相机拍照'), findsOneWidget);
     expect(find.text('PPT / 文档扫描'), findsOneWidget);
     expect(find.text('从相册导入'), findsOneWidget);
+    expect(find.text('可多选照片，录音会继续'), findsOneWidget);
 
     await tester.tap(find.text('从相册导入'));
     await tester.pumpAndSettle();

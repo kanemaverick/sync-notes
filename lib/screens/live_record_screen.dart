@@ -447,12 +447,11 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
         offsetMs: offsetMs,
         deviceTime: startedAt,
       );
-      final sourcePath = await _galleryPicker.pickImage();
-      if (sourcePath == null) return;
-      await _persistPhoto(
-        sourcePath: sourcePath,
+      final paths = await _galleryPicker.pickImages();
+      if (paths.isEmpty) return;
+      await _persistGalleryBatch(
+        paths,
         offsetMs: await _clock.offsetMs(),
-        source: 'gallery',
         deviceTime: DateTime.now(),
       );
     } catch (error) {
@@ -471,21 +470,50 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
           .readPendingGalleryImportDeviceTime(_session.id);
       final paths = await _galleryPicker.retrieveLostImages();
       if (paths.isEmpty) return;
-      await _persistPhoto(
-        sourcePath: paths.first,
+      await _persistGalleryBatch(
+        paths,
         offsetMs: pendingOffset ?? await _clock.offsetMs(),
-        source: 'gallery',
         deviceTime: pendingDeviceTime ?? DateTime.now(),
       );
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('已恢复上次未完成的相册照片导入')));
-      }
     } catch (error) {
       _showPhotoError('恢复相册照片失败', error);
     } finally {
       await widget.storage.clearPendingGalleryImport(_session.id);
+    }
+  }
+
+  Future<void> _persistGalleryBatch(
+    List<String> paths, {
+    required int offsetMs,
+    required DateTime deviceTime,
+  }) async {
+    var imported = 0;
+    // Sequential processing bounds thumbnail memory; all photos in this batch
+    // share the selection time, not their individual file-processing time.
+    for (final path in paths) {
+      try {
+        await _persistPhoto(
+          sourcePath: path,
+          offsetMs: offsetMs,
+          source: 'gallery',
+          deviceTime: deviceTime,
+        );
+        imported++;
+      } catch (_) {
+        // A damaged or unavailable photo must not block the remaining photos.
+      }
+    }
+    if (mounted) {
+      final failed = paths.length - imported;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            failed == 0
+                ? '已导入 $imported 张照片'
+                : '已导入 $imported 张，$failed 张失败，请重新选择失败的照片',
+          ),
+        ),
+      );
     }
   }
 

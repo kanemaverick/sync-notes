@@ -1,7 +1,7 @@
 import 'package:image_picker/image_picker.dart';
 
 abstract interface class GalleryPhotoPicker {
-  Future<String?> pickImage();
+  Future<List<String>> pickImages();
 
   Future<List<String>> retrieveLostImages();
 }
@@ -13,12 +13,9 @@ class ImagePickerGalleryPhotoPicker implements GalleryPhotoPicker {
   final ImagePicker _picker;
 
   @override
-  Future<String?> pickImage() async {
-    final file = await _picker.pickImage(
-      source: ImageSource.gallery,
-      requestFullMetadata: false,
-    );
-    return file?.path;
+  Future<List<String>> pickImages() async {
+    final files = await _picker.pickMultiImage(requestFullMetadata: false);
+    return files.map((file) => file.path).toList();
   }
 
   @override

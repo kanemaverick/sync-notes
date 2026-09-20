@@ -41,7 +41,7 @@ class PhotoSourceSheet extends StatelessWidget {
               minTileHeight: 72,
               leading: const Icon(Icons.photo_library_outlined, size: 32),
               title: const Text('从相册导入'),
-              subtitle: const Text('选择一张已有照片，录音会继续'),
+              subtitle: const Text('可多选照片，录音会继续'),
               onTap: () => Navigator.pop(context, PhotoSourceChoice.gallery),
             ),
           ],
