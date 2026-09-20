@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import '../models/entities.dart';
 import 'ai_processing_service.dart';
 import 'illustrated_note.dart';
+import 'transcript_documents.dart';
 
 class StoredPhoto {
   const StoredPhoto({required this.path, required this.thumbnailPath});
@@ -152,7 +153,18 @@ class MediaStorage {
     );
     final noteFile = await writeMarkdown(
       sessionId: session.id,
-      markdown: markdown,
+      // Rebuild from current evidence, not an old cached note with stale text.
+      markdown: await const MockAiProcessingService(includePrompt: false).process(
+        AiProcessingInput(
+          session: session,
+          transcripts: transcriptSegments,
+          events: events,
+          photos: buildPhotoContexts(
+            events: events,
+            transcripts: transcriptSegments,
+          ),
+        ),
+      ),
     );
     final photos =
         events
@@ -188,7 +200,13 @@ class MediaStorage {
     final manifestFile = File(p.join(root.path, 'export_manifest.json'));
     await manifestFile.writeAsString(
       const JsonEncoder.withIndent('  ').convert({
-        'schemaVersion': 3,
+        'schemaVersion': 4,
+        'transcriptStatus': 'unreviewed',
+        'timeSemantics': {
+          'offsetMs': 'playable audio position; pauses excluded',
+          'deviceTime':
+              'device event time; gallery uses import time, not shutter time',
+        },
         'session': {
           'id': session.id,
           'title': session.title,
@@ -263,6 +281,35 @@ class MediaStorage {
 
     final encoder = ZipFileEncoder()..create(zipFile.path);
     try {
+      final documents = <String, String>{
+        'README.md':
+            '# ${session.title} · 原始记录包\n\n'
+            '这不是最终整理稿。推荐顺序：QUALITY.md → 原始音频重转写 → photos.md → note.md。\n\n'
+            '- audio/：原始分片，不可丢弃；按 manifest.json 的 timelineStartMs 对齐，不按文件名猜时间。\n'
+            '- transcripts/raw.srt：原始识别片段；transcripts/draft.md：仅合段排版。\n'
+            '- images/ 与 photos.md：原图及索引；note.md：图文时间轴预览，不重复粘贴图片附近讲解。\n'
+            '- manifest.json：完整机器可读数据；CODEX_PROMPT.md：整理要求。\n'
+            '- 暂停时保留设备时间和播放位置；相册导入时间不能当作原始快门时间。\n'
+            '- 第三方重转写可能上传音频，使用前确认服务和隐私要求。\n',
+        'QUALITY.md':
+            '${buildTranscriptQualityReport(transcriptSegments)}\n'
+            '- 原始音频：${audioFiles.length}/${sortedAudioSegments.length} 段可用。\n'
+            '${audioFiles.length < sortedAudioSegments.length ? '- 警告：有缺失录音，详见 manifest.json 的 included=false。\n' : ''}',
+        'transcripts/raw.srt': buildTranscriptSrt(transcriptSegments),
+        'transcripts/draft.md': buildReadableTranscript(transcriptSegments),
+        'photos.md':
+            '# 图片索引\n\n> 相册时间为导入时间，不代表拍摄时刻；±45秒只是候选讲解范围。\n\n'
+            '${[for (var i = 0; i < photos.length; i++) '## 照片 ${i + 1}\n\n![照片 ${i + 1}](${photoFiles[photos[i].id]})\n\n'
+                  '- offsetMs：${photos[i].offsetMs}；deviceTime：${photos[i].createdAt.toIso8601String()}\n'
+                  '- 来源：${photos[i].photoSource ?? '未知'}；备注：${photos[i].note ?? '无'}\n'
+                  '- 候选转写片段 ID：${transcriptSegments.where((t) => t.endMs >= photos[i].offsetMs - 45000 && t.startMs <= photos[i].offsetMs + 45000).map((t) => t.id).join(', ')}\n'].join('\n')}',
+      };
+      for (final entry in documents.entries) {
+        final file = File(p.join(exports.path, entry.key));
+        await file.parent.create(recursive: true);
+        await file.writeAsString(entry.value, flush: true);
+        await encoder.addFile(file, entry.key);
+      }
       await encoder.addFile(promptFile, 'CODEX_PROMPT.md');
       await encoder.addFile(noteFile, 'note.md');
       await encoder.addFile(manifestFile, 'manifest.json');

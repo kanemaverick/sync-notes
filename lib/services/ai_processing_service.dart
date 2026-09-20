@@ -1,6 +1,7 @@
 import '../core/timeline_clock.dart';
 import '../models/entities.dart';
 import 'illustrated_note.dart';
+import 'transcript_documents.dart';
 
 enum EvidenceKind { teacherSaid, directlyObserved, inferred, needsVerification }
 
@@ -48,7 +49,9 @@ abstract interface class AiProcessingService {
 }
 
 class MockAiProcessingService implements AiProcessingService {
-  const MockAiProcessingService();
+  const MockAiProcessingService({this.includePrompt = true});
+
+  final bool includePrompt;
 
   @override
   Future<String> process(AiProcessingInput input) async {
@@ -80,15 +83,16 @@ class MockAiProcessingService implements AiProcessingService {
         ..writeln('记录到 $questions 个“没听懂”节点。Codex 整理时应优先结合每个节点前后约45秒的转写重新解释。')
         ..writeln();
     }
-    buffer
-      ..writeln('## 交给 Codex 的整理提示词')
-      ..writeln()
-      ..writeln('```text')
-      ..writeln(buildCodexAnalysisPrompt(input.session))
-      ..writeln('```')
-      ..writeln()
-      ..writeln('---')
-      ..writeln('生成器：同步讲记记录整理器（无需API密钥）');
+    if (includePrompt)
+      buffer
+        ..writeln('## 交给 Codex 的整理提示词')
+        ..writeln()
+        ..writeln('```text')
+        ..writeln(buildCodexAnalysisPrompt(input.session))
+        ..writeln('```')
+        ..writeln()
+        ..writeln('---')
+        ..writeln('生成器：同步讲记记录整理器（无需API密钥）');
     return buffer.toString();
   }
 }
@@ -143,10 +147,16 @@ String buildCodexAnalysisPrompt(Session session) {
   buffer
     ..writeln()
     ..writeln('请先读取：')
-    ..writeln('1. note.md：按时间整理的转写初稿、照片引用和用户标记。')
+    ..writeln('1. README.md 和 QUALITY.md：包结构、缺失媒体和转写质量提示。')
+    ..writeln('   note.md：未校对的合段预览、照片引用和用户标记，不是最终笔记。')
+    ..writeln('   transcripts/draft.md 与 raw.srt：可读初稿和未校订的原始时间片段。')
     ..writeln('2. manifest.json：场景信息、时间节点、照片偏移和文件对应关系。')
     ..writeln('3. images/：现场原始照片；请自行观察并在必要时做OCR。')
     ..writeln('4. audio/：原始WAV分片；当转写不确定时，可结合原始录音核对。')
+    ..writeln(
+      '   音频优先：先按 audioSegments[].timelineStartMs 合并重转写时间戳，再参考手机初稿；不得只把乱码润色成结论。',
+    )
+    ..writeln('   photos.md：图片索引；相册照片的时间是导入时间，不保证是拍摄时间，邻近±45秒只是候选关联。')
     ..writeln()
     ..writeln('整理规则：')
     ..writeln('1. 以 offsetMs 和时间戳恢复讲解、照片、章节、重点和疑问之间的关系。')
@@ -209,13 +219,13 @@ void _writeChronologicalIllustratedNotes(
     }
   }
 
-  for (final transcript in input.transcripts) {
+  for (final transcript in transcriptParagraphs(input.transcripts)) {
     if (transcript.text.trim().isEmpty) continue;
     items.add((
       offsetMs: transcript.startMs,
       priority: 1,
       markdown:
-          '- **[${EvidenceKind.teacherSaid.label}]** ${_formatOffset(transcript.startMs)} ${transcript.text.trim()}',
+          '**[未校对转写 · ${transcript.source}] ${_formatOffset(transcript.startMs)}–${_formatOffset(transcript.endMs)}**\n\n${transcript.text.trim()}',
     ));
   }
 
@@ -227,14 +237,12 @@ void _writeChronologicalIllustratedNotes(
     final caption = photo.userNote?.trim().isNotEmpty == true
         ? photo.userNote!.trim()
         : '照片 ${index + 1}';
-    final nearby = photo.nearbyTranscript.trim();
     items.add((
       offsetMs: photo.offsetMs,
       priority: 2,
       markdown:
           '![${markdownEscapeAlt(caption)}]($assetPath)\n\n'
-          '*[${EvidenceKind.directlyObserved.label}] ${_photoTime(photo)}：$caption*'
-          '${nearby.isEmpty ? '' : '\n\n> 附近讲解：$nearby'}',
+          '*[原始照片，内容待核实] ${_photoTime(photo)}：$caption*',
     ));
   }
 

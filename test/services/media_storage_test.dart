@@ -137,6 +137,11 @@ void main() {
         'manifest.json',
         'images/photo_001.jpg',
         'audio/segment_0000.wav',
+        'README.md',
+        'QUALITY.md',
+        'photos.md',
+        'transcripts/raw.srt',
+        'transcripts/draft.md',
       ]),
     );
     final manifestFile = archive.files.singleWhere(
@@ -145,7 +150,15 @@ void main() {
     final manifest =
         jsonDecode(utf8.decode(manifestFile.content as List<int>))
             as Map<String, dynamic>;
-    expect(manifest['schemaVersion'], 3);
+    expect(manifest['schemaVersion'], 4);
+    expect(manifest['transcriptStatus'], 'unreviewed');
+    final note = utf8.decode(
+      archive.files.singleWhere((f) => f.name == 'note.md').content
+          as List<int>,
+    );
+    expect(note, contains('未校对转写'));
+    expect(note, isNot(contains('**[老师明确讲过]**')));
+    expect(note, contains('这是流速测量设备'));
     expect((manifest['audioSegments'] as List), hasLength(1));
     expect(
       (manifest['audioSegments'] as List).single['file'],

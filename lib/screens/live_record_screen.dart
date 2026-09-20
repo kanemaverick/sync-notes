@@ -16,6 +16,7 @@ import '../services/gallery_photo_picker.dart';
 import '../services/document_scanner.dart';
 import '../services/media_storage.dart';
 import '../widgets/photo_source_sheet.dart';
+import '../widgets/live_transcript_panel.dart';
 import '../widgets/recording_quick_actions.dart';
 import '../widgets/text_input_dialog.dart';
 import '../widgets/timeline_event_tile.dart';
@@ -64,6 +65,7 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
   String _cloudTranscriptionState = 'disabled';
   String _partialTranscript = '';
   String? _transcriptionError;
+  String? _cloudTranscriptionError;
   String? _error;
 
   bool get _paused => _session.status == SessionStatus.paused;
@@ -101,6 +103,7 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
       if (mounted) {
         setState(() {
           _cloudTranscriptionState = data['state'] as String? ?? 'fallback';
+          _cloudTranscriptionError = data['error'] as String?;
         });
       }
       return;
@@ -803,17 +806,18 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
                     RecordingWaveform(active: !_paused, phase: _offsetMs),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: _LiveTranscriptCard(
-                        ready:
-                            _transcriptionReady ||
-                            _cloudTranscriptionState == 'connected',
-                        paused: _paused,
-                        cloudState: _cloudTranscriptionState,
+                      child: LiveTranscriptPanel(
+                        transcripts: _transcripts,
+                        status: _paused
+                            ? '已暂停'
+                            : switch (_cloudTranscriptionState) {
+                                'connected' => '云端识别',
+                                'connecting' => '连接云端',
+                                'fallback' => '本地兜底',
+                                _ => _transcriptionReady ? '离线识别' : '准备中',
+                              },
                         partialText: _partialTranscript,
-                        finalizedText: _transcripts.isEmpty
-                            ? ''
-                            : _transcripts.last.text,
-                        error: _transcriptionError,
+                        error: _cloudTranscriptionError ?? _transcriptionError,
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -921,89 +925,4 @@ class RecordingWaveform extends StatelessWidget {
       ),
     ),
   );
-}
-
-class _LiveTranscriptCard extends StatelessWidget {
-  const _LiveTranscriptCard({
-    required this.ready,
-    required this.paused,
-    required this.cloudState,
-    required this.partialText,
-    required this.finalizedText,
-    required this.error,
-  });
-
-  final bool ready;
-  final bool paused;
-  final String cloudState;
-  final String partialText;
-  final String finalizedText;
-  final String? error;
-
-  @override
-  Widget build(BuildContext context) {
-    final text = partialText.isNotEmpty
-        ? partialText
-        : finalizedText.isNotEmpty
-        ? finalizedText
-        : ready
-        ? '说话后字幕会显示在这里'
-        : error == null
-        ? '正在加载本地转写模型…'
-        : '转写暂不可用，原始录音仍在继续';
-    return Semantics(
-      liveRegion: true,
-      label: '实时转写初稿：$text',
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(
-                    error != null
-                        ? Icons.subtitles_off_outlined
-                        : Icons.subtitles_outlined,
-                    size: 21,
-                  ),
-                  const SizedBox(width: 8),
-                  const Text(
-                    '实时转写（初稿）',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const Spacer(),
-                  Text(
-                    paused
-                        ? '已暂停'
-                        : switch (cloudState) {
-                            'connected' => '腾讯云',
-                            'connecting' => '连接云端',
-                            'fallback' => '本地兜底',
-                            _ => ready ? '离线识别' : '准备中',
-                          },
-                    style: Theme.of(context).textTheme.labelMedium,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(
-                text,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 17,
-                  height: 1.35,
-                  color: partialText.isNotEmpty
-                      ? Theme.of(context).colorScheme.primary
-                      : null,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }

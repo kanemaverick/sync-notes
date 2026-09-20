@@ -97,6 +97,8 @@ void main() {
     );
     expect(markdown, contains('### 章节1 · 00:00'));
     expect(markdown, contains('这是老师讲解的公式'));
+    expect('这是老师讲解的公式'.allMatches(markdown).length, 1);
+    expect(markdown, isNot(contains('**[老师明确讲过]**')));
     expect(markdown, contains('![板书公式](images/photo_001.png)'));
     expect(
       markdown.indexOf('这是老师讲解的公式'),
