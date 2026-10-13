@@ -18,6 +18,7 @@ import '../services/media_storage.dart';
 import '../widgets/photo_source_sheet.dart';
 import '../widgets/live_transcript_panel.dart';
 import '../widgets/recording_quick_actions.dart';
+import '../widgets/recording_page_layout.dart';
 import '../widgets/text_input_dialog.dart';
 import '../widgets/timeline_event_tile.dart';
 import 'camera_capture_screen.dart';
@@ -745,7 +746,7 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
         body: _busy
             ? const Center(child: CircularProgressIndicator())
             : SafeArea(
-                child: Column(
+                child: RecordingPageLayout(
                   children: [
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
@@ -791,12 +792,14 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
                                   ],
                                 ),
                               ),
-                              Column(
-                                children: [
-                                  Text('$_photoCount 张照片'),
-                                  const SizedBox(height: 4),
-                                  Text(_currentChapter),
-                                ],
+                              Flexible(
+                                child: Column(
+                                  children: [
+                                    Text('$_photoCount 张照片'),
+                                    const SizedBox(height: 4),
+                                    Text(_currentChapter),
+                                  ],
+                                ),
                               ),
                             ],
                           ),
@@ -866,22 +869,20 @@ class _LiveRecordScreenState extends State<LiveRecordScreen>
                         ),
                       ),
                     ),
-                    Expanded(
-                      child: _events.isEmpty
-                          ? const Center(child: Text('拍照或标记后会显示在这里'))
-                          : ListView.separated(
-                              padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-                              itemCount: _events.length.clamp(0, 5),
-                              separatorBuilder: (_, _) =>
-                                  const SizedBox(height: 8),
-                              itemBuilder: (_, index) => TimelineEventTile(
-                                event: _events.reversed.elementAt(index),
-                                onTap: () => _showEventDetails(
-                                  _events.reversed.elementAt(index),
-                                ),
-                              ),
-                            ),
-                    ),
+                    if (_events.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Center(child: Text('拍照或标记后会显示在这里')),
+                      )
+                    else
+                      for (final event in _events.reversed.take(5))
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                          child: TimelineEventTile(
+                            event: event,
+                            onTap: () => _showEventDetails(event),
+                          ),
+                        ),
                   ],
                 ),
               ),
